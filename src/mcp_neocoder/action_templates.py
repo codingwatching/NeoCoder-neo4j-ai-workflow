@@ -35,6 +35,24 @@ class ActionTemplateMixin:
     driver: Any = None
     database: str = "neo4j"
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize ActionTemplateMixin.
+
+        This is the last mixin in the MRO before object, so we consume
+        remaining args/kwargs to prevent them from reaching object.__init__().
+        """
+        # Set database/driver from kwargs if provided and not already set
+        if not hasattr(self, "database") or self.database is None:
+            self.database = kwargs.pop("database", "neo4j")
+        else:
+            kwargs.pop("database", None)  # Consume but don't override
+        if not hasattr(self, "driver") or self.driver is None:
+            self.driver = kwargs.pop("driver", None)
+        else:
+            kwargs.pop("driver", None)  # Consume but don't override
+        # Don't pass args/kwargs to object.__init__()
+        super().__init__()
+
     async def _read_query(
         self, tx: AsyncManagedTransaction, query: str, params: dict
     ) -> str:
