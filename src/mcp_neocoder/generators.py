@@ -7,7 +7,7 @@ making it easy to extend the system without modifying core files.
 
 import logging
 import os
-from typing import List, Optional
+from typing import Annotated, List, Optional
 
 import mcp.types as types
 from pydantic import Field
@@ -16,10 +16,18 @@ from .incarnation_registry import registry as incarnation_registry
 
 logger = logging.getLogger("mcp_neocoder.generators")
 
+
 def create_incarnation_template(
-    name: str = Field(..., description="Name for the new incarnation (e.g., 'visual_analysis')"),
-    description: Optional[str] = Field(None, description="Description of what this incarnation does"),
-    tool_names: Optional[List[str]] = Field(None, description="Names of tools to include in the template")
+    name: Annotated[
+        str, Field(description="Name for the new incarnation (e.g., 'visual_analysis')")
+    ],
+    description: Annotated[
+        Optional[str], Field(description="Description of what this incarnation does")
+    ] = None,
+    tool_names: Annotated[
+        Optional[List[str]],
+        Field(description="Names of tools to include in the template"),
+    ] = None,
 ) -> List[types.TextContent]:
     """Create a new incarnation template file.
 
@@ -30,8 +38,8 @@ def create_incarnation_template(
     """
     try:
         # Ensure name is in the right format
-        name = name.lower().replace(' ', '_').replace('-', '_')
-        if name.endswith('_incarnation'):
+        name = name.lower().replace(" ", "_").replace("-", "_")
+        if name.endswith("_incarnation"):
             name = name[:-12]  # Remove _incarnation suffix if present
 
         # Create the template file
@@ -65,14 +73,29 @@ Your incarnation will be automatically discovered thanks to the plugin architect
         return [types.TextContent(type="text", text=response)]
     except Exception as e:
         logger.error(f"Error creating incarnation template: {e}")
-        return [types.TextContent(type="text", text=f"Error creating incarnation template: {e}")]
+        return [
+            types.TextContent(
+                type="text", text=f"Error creating incarnation template: {e}"
+            )
+        ]
 
 
 def create_tool_template(
-    name: str = Field(..., description="Name for the new tool (e.g., 'analyze_data')"),
-    incarnation: str = Field(..., description="Name of the incarnation to add this tool to"),
-    description: Optional[str] = Field(None, description="Description of what this tool does"),
-    parameters: Optional[List[str]] = Field(None, description="Parameter names for the tool (e.g., ['file_path', 'limit'])")
+    name: Annotated[
+        str, Field(description="Name for the new tool (e.g., 'analyze_data')")
+    ],
+    incarnation: Annotated[
+        str, Field(description="Name of the incarnation to add this tool to")
+    ],
+    description: Annotated[
+        Optional[str], Field(description="Description of what this tool does")
+    ] = None,
+    parameters: Annotated[
+        Optional[List[str]],
+        Field(
+            description="Parameter names for the tool (e.g., ['file_path', 'limit'])"
+        ),
+    ] = None,
 ) -> List[types.TextContent]:
     """Create a new tool template in an existing incarnation.
 
@@ -80,27 +103,31 @@ def create_tool_template(
     and annotations to ensure it's automatically registered with the system.
     """
     # Normalize names
-    name = name.lower().replace(' ', '_').replace('-', '_')
-    incarnation = incarnation.lower().replace(' ', '_').replace('-', '_')
-    if incarnation.endswith('_incarnation'):
+    name = name.lower().replace(" ", "_").replace("-", "_")
+    incarnation = incarnation.lower().replace(" ", "_").replace("-", "_")
+    if incarnation.endswith("_incarnation"):
         incarnation = incarnation[:-12]
 
     # Find the incarnation file
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    incarnation_file = os.path.join(current_dir, "incarnations", f"{incarnation}_incarnation.py")
+    incarnation_file = os.path.join(
+        current_dir, "incarnations", f"{incarnation}_incarnation.py"
+    )
 
     if not os.path.exists(incarnation_file):
-        return [types.TextContent(
-            type="text",
-            text=f"Error: Incarnation file not found: {incarnation_file}\n\nPlease create the incarnation first."
-        )]
+        return [
+            types.TextContent(
+                type="text",
+                text=f"Error: Incarnation file not found: {incarnation_file}\n\nPlease create the incarnation first.",
+            )
+        ]
 
     # Generate tool method template
     param_list = parameters or ["param1", "param2"]
     param_definitions = []
     for param in param_list:
         param_definitions.append(
-            f"        {param}: str = Field(..., description=\"Description of {param}\")"
+            f'        {param}: str = Field(..., description="Description of {param}")'
         )
 
     tool_template = f"""
@@ -125,11 +152,11 @@ def create_tool_template(
 
     try:
         # Read the incarnation file
-        with open(incarnation_file, 'r') as f:
+        with open(incarnation_file, "r") as f:
             content = f.read()
 
         # Find the end of the class
-        lines = content.split('\n')
+        lines = content.split("\n")
         class_found = False
         tool_methods_list = None
         insert_position = len(lines) - 1
@@ -151,10 +178,12 @@ def create_tool_template(
 
         # If we didn't find the class or a good insert position, insert at the end
         if not class_found:
-            return [types.TextContent(
-                type="text",
-                text=f"Error: Could not find incarnation class in {incarnation_file}"
-            )]
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Error: Could not find incarnation class in {incarnation_file}",
+                )
+            ]
 
         # Insert the tool method
         lines.insert(insert_position + 1, tool_template)
@@ -165,22 +194,29 @@ def create_tool_template(
             if tool_methods_line.endswith("]"):
                 # Add the new tool to the list
                 if "]" in tool_methods_line:
-                    lines[tool_methods_list] = tool_methods_line.replace("]", f', "{name}"]')
+                    lines[tool_methods_list] = tool_methods_line.replace(
+                        "]", f', "{name}"]'
+                    )
                 else:
                     # List continues on next line, find end
                     for j in range(tool_methods_list + 1, len(lines)):
                         if "]" in lines[j]:
                             list_end = lines[j].find("]")
-                            lines[j] = lines[j][:list_end] + f', "{name}"' + lines[j][list_end:]
+                            lines[j] = (
+                                lines[j][:list_end]
+                                + f', "{name}"'
+                                + lines[j][list_end:]
+                            )
                             break
 
         # Write back to the file
-        with open(incarnation_file, 'w') as f:
-            f.write('\n'.join(lines))
+        with open(incarnation_file, "w") as f:
+            f.write("\n".join(lines))
 
-        return [types.TextContent(
-            type="text",
-            text=f"""# Tool Template Added
+        return [
+            types.TextContent(
+                type="text",
+                text=f"""# Tool Template Added
 
 The tool `{name}` has been added to the `{incarnation}` incarnation.
 
@@ -192,8 +228,11 @@ The tool `{name}` has been added to the `{incarnation}` incarnation.
 2. Restart the NeoCoder server to make the new tool available
 3. Switch to the incarnation: `switch_incarnation(incarnation_type="{incarnation}")`
 4. Use your new tool: `{name}({', '.join(f'{p}="value"' for p in param_list)})`
-"""
-        )]
+""",
+            )
+        ]
     except Exception as e:
         logger.error(f"Error creating tool template: {e}")
-        return [types.TextContent(type="text", text=f"Error creating tool template: {e}")]
+        return [
+            types.TextContent(type="text", text=f"Error creating tool template: {e}")
+        ]

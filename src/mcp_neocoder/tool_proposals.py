@@ -8,38 +8,85 @@ and for users to request new tool capabilities in the NeoCoder system.
 import json
 import logging
 import uuid
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
 import mcp.types as types
-from .event_loop_manager import safe_neo4j_session
-from pydantic import Field
 from neo4j import AsyncManagedTransaction
+from pydantic import Field
+
+from .event_loop_manager import safe_neo4j_session
 
 logger = logging.getLogger("mcp_neocoder.tool_proposals")
+
+
+# Constants for Field definitions to avoid B008
+_TOOL_NAME_FIELD = Field(..., description="Proposed tool name")
+_PROPOSAL_DESCRIPTION_FIELD = Field(
+    ..., description="Description of the tool's functionality"
+)
+_PARAMETERS_FIELD = Field(..., description="List of parameter definitions for the tool")
+_RATIONALE_FIELD = Field(
+    ..., description="Rationale for why this tool would be valuable"
+)
+_IMPLEMENTATION_NOTES_FIELD = Field(
+    None, description="Optional technical notes for implementation"
+)
+_EXAMPLE_USAGE_FIELD = Field(
+    None, description="Optional example of how the tool would be used"
+)
+
+_REQUEST_DESCRIPTION_FIELD = Field(
+    ..., description="Description of the desired tool functionality"
+)
+_USE_CASE_FIELD = Field(..., description="How you would use this tool")
+_PRIORITY_FIELD = Field(
+    "MEDIUM", description="Priority of the request (LOW, MEDIUM, HIGH)"
+)
+_REQUESTED_BY_FIELD = Field(None, description="Name of the person requesting the tool")
+
+_PROPOSAL_ID_FIELD = Field(..., description="ID of the tool proposal to retrieve")
+_REQUEST_ID_FIELD = Field(..., description="ID of the tool request to retrieve")
+
+_PROPOSAL_STATUS_FILTER_FIELD = Field(
+    None, description="Filter by status (Proposed, Approved, Implemented, Rejected)"
+)
+_PROPOSAL_LIMIT_FIELD = Field(10, description="Maximum number of proposals to return")
+
+_REQUEST_STATUS_FILTER_FIELD = Field(
+    None, description="Filter by status (Submitted, In Review, Implemented, Rejected)"
+)
+_REQUEST_PRIORITY_FILTER_FIELD = Field(
+    None, description="Filter by priority (LOW, MEDIUM, HIGH)"
+)
+_REQUEST_LIMIT_FIELD = Field(10, description="Maximum number of requests to return")
 
 
 class ToolProposalMixin:
     """Mixin class providing tool proposal functionality for the Neo4jWorkflowServer."""
 
-    database: str  # Define the database attribute
-    driver: Any
+    database: str = "neo4j"
+    driver: Any = None
 
-    async def _read_query(self, tx: AsyncManagedTransaction, query: str, params: dict) -> str:
+    async def _read_query(
+        self, tx: AsyncManagedTransaction, query: str, params: dict
+    ) -> str:
         """Execute a read query and return results as JSON string."""
         raise NotImplementedError("_read_query must be implemented by the parent class")
 
-    async def _write(self, tx: AsyncManagedTransaction, query: str, params: dict):
+    async def _write(
+        self, tx: AsyncManagedTransaction, query: str, params: dict
+    ) -> str:
         """Execute a write query and return results as JSON string."""
         raise NotImplementedError("_write must be implemented by the parent class")
 
     async def propose_tool(
         self,
-        name: str = Field(..., description="Proposed tool name"),
-        description: str = Field(..., description="Description of the tool's functionality"),
-        parameters: List[Dict[str, Any]] = Field(..., description="List of parameter definitions for the tool"),
-        rationale: str = Field(..., description="Rationale for why this tool would be valuable"),
-        implementation_notes: Optional[str] = Field(None, description="Optional technical notes for implementation"),
-        example_usage: Optional[str] = Field(None, description="Optional example of how the tool would be used")
+        name: str = _TOOL_NAME_FIELD,
+        description: str = _PROPOSAL_DESCRIPTION_FIELD,
+        parameters: List[Dict[str, Any]] = _PARAMETERS_FIELD,
+        rationale: str = _RATIONALE_FIELD,
+        implementation_notes: Optional[str] = _IMPLEMENTATION_NOTES_FIELD,
+        example_usage: Optional[str] = _EXAMPLE_USAGE_FIELD,
     ) -> List[types.TextContent]:
         """Propose a new tool for the NeoCoder system."""
 
@@ -67,16 +114,21 @@ class ToolProposalMixin:
             "name": name,
             "description": description,
             "parameters": parameters_json,
-            "rationale": rationale
+            "rationale": rationale,
         }
 
         # Add optional fields if provided
         if implementation_notes:
-            query = query.replace("status: \"Proposed\"", "status: \"Proposed\", implementationNotes: $implementationNotes")
+            query = query.replace(
+                'status: "Proposed"',
+                'status: "Proposed", implementationNotes: $implementationNotes',
+            )
             params["implementationNotes"] = implementation_notes
 
         if example_usage:
-            query = query.replace("status: \"Proposed\"", "status: \"Proposed\", exampleUsage: $exampleUsage")
+            query = query.replace(
+                'status: "Proposed"', 'status: "Proposed", exampleUsage: $exampleUsage'
+            )
             params["exampleUsage"] = example_usage
 
         # Complete the query
@@ -89,7 +141,9 @@ class ToolProposalMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -98,20 +152,25 @@ class ToolProposalMixin:
                     text += f"**Proposal ID:** {proposal_id}\n"
                     text += f"**Tool Name:** {name}\n"
                     text += "**Status:** Proposed\n\n"
-                    text += f"The proposal will be reviewed by the development team. You can check the status of your proposal using `get_tool_proposal(id=\"{proposal_id}\")`."
+                    text += f'The proposal will be reviewed by the development team. You can check the status of your proposal using `get_tool_proposal(id="{proposal_id}")`.'
 
                     return [types.TextContent(type="text", text=text)]
                 else:
-                    return [types.TextContent(type="text", text="Error submitting tool proposal")]
+                    return [
+                        types.TextContent(
+                            type="text", text="Error submitting tool proposal"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error proposing tool: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
+
     async def request_tool(
         self,
-        description: str = Field(..., description="Description of the desired tool functionality"),
-        use_case: str = Field(..., description="How you would use this tool"),
-        priority: str = Field("MEDIUM", description="Priority of the request (LOW, MEDIUM, HIGH)"),
-        requested_by: Optional[str] = Field(None, description="Name of the person requesting the tool")
+        description: str = _REQUEST_DESCRIPTION_FIELD,
+        use_case: str = _USE_CASE_FIELD,
+        priority: str = _PRIORITY_FIELD,
+        requested_by: Optional[str] = _REQUESTED_BY_FIELD,
     ) -> List[types.TextContent]:
         """Request a new tool feature for the NeoCoder system."""
 
@@ -134,12 +193,14 @@ class ToolProposalMixin:
             "id": request_id,
             "description": description,
             "useCase": use_case,
-            "priority": priority
+            "priority": priority,
         }
 
         # Add requester name if provided
         if requested_by:
-            query = query.replace("status: \"Submitted\"", "status: \"Submitted\", requestedBy: $requestedBy")
+            query = query.replace(
+                'status: "Submitted"', 'status: "Submitted", requestedBy: $requestedBy'
+            )
             params["requestedBy"] = requested_by
 
         # Complete the query
@@ -152,7 +213,9 @@ class ToolProposalMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -162,18 +225,21 @@ class ToolProposalMixin:
                     text += f"**Description:** {description}\n"
                     text += f"**Priority:** {priority}\n"
                     text += "**Status:** Submitted\n\n"
-                    text += f"The request will be reviewed by the development team. You can check the status of your request using `get_tool_request(id=\"{request_id}\")`."
+                    text += f'The request will be reviewed by the development team. You can check the status of your request using `get_tool_request(id="{request_id}")`.'
 
                     return [types.TextContent(type="text", text=text)]
                 else:
-                    return [types.TextContent(type="text", text="Error submitting tool request")]
+                    return [
+                        types.TextContent(
+                            type="text", text="Error submitting tool request"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error requesting tool: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def get_tool_proposal(
-        self,
-        id: str = Field(..., description="ID of the tool proposal to retrieve")
+        self, id: str = _PROPOSAL_ID_FIELD
     ) -> List[types.TextContent]:
         """Get a specific tool proposal by ID."""
         query = """
@@ -191,7 +257,9 @@ class ToolProposalMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, {"id": id})
+                results_json = await session.execute_read(
+                    self._read_query, query, {"id": id}
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -216,10 +284,16 @@ class ToolProposalMixin:
                     text += "## Parameters\n\n"
                     if parameters:
                         for i, param in enumerate(parameters, 1):
-                            text += f"### {i}. {param.get('name', 'Unnamed parameter')}\n"
-                            text += f"- **Type:** {param.get('type', 'Not specified')}\n"
+                            text += (
+                                f"### {i}. {param.get('name', 'Unnamed parameter')}\n"
+                            )
+                            text += (
+                                f"- **Type:** {param.get('type', 'Not specified')}\n"
+                            )
                             text += f"- **Description:** {param.get('description', 'No description')}\n"
-                            text += f"- **Required:** {param.get('required', False)}\n\n"
+                            text += (
+                                f"- **Required:** {param.get('required', False)}\n\n"
+                            )
                     else:
                         text += "No parameters defined.\n\n"
 
@@ -231,14 +305,17 @@ class ToolProposalMixin:
 
                     return [types.TextContent(type="text", text=text)]
                 else:
-                    return [types.TextContent(type="text", text=f"No tool proposal found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No tool proposal found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error retrieving tool proposal: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def get_tool_request(
-        self,
-        id: str = Field(..., description="ID of the tool request to retrieve")
+        self, id: str = _REQUEST_ID_FIELD
     ) -> List[types.TextContent]:
         """Get a specific tool request by ID."""
         query = """
@@ -257,7 +334,9 @@ class ToolProposalMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, {"id": id})
+                results_json = await session.execute_read(
+                    self._read_query, query, {"id": id}
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -282,15 +361,19 @@ class ToolProposalMixin:
 
                     return [types.TextContent(type="text", text=text)]
                 else:
-                    return [types.TextContent(type="text", text=f"No tool request found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No tool request found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error retrieving tool request: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def list_tool_proposals(
         self,
-        status: Optional[str] = Field(None, description="Filter by status (Proposed, Approved, Implemented, Rejected)"),
-        limit: int = Field(10, description="Maximum number of proposals to return")
+        status: Optional[str] = _PROPOSAL_STATUS_FILTER_FIELD,
+        limit: int = _PROPOSAL_LIMIT_FIELD,
     ) -> List[types.TextContent]:
         """List all tool proposals with optional filtering."""
         query = """
@@ -316,7 +399,9 @@ class ToolProposalMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -329,21 +414,25 @@ class ToolProposalMixin:
                     for p in results:
                         text += f"| {p.get('id', 'N/A')[:8]}... | {p.get('name', 'Unnamed')} | {p.get('status', 'Unknown')} | {p.get('timestamp', 'Unknown')[:10]} | {p.get('description', 'No description')[:50]}... |\n"
 
-                    text += "\nTo view full details of a proposal, use `get_tool_proposal(id=\"proposal-id\")`"
+                    text += '\nTo view full details of a proposal, use `get_tool_proposal(id="proposal-id")`'
 
                     return [types.TextContent(type="text", text=text)]
                 else:
                     status_msg = f" with status '{status}'" if status else ""
-                    return [types.TextContent(type="text", text=f"No tool proposals found{status_msg}.")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No tool proposals found{status_msg}."
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error listing tool proposals: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def list_tool_requests(
         self,
-        status: Optional[str] = Field(None, description="Filter by status (Submitted, In Review, Implemented, Rejected)"),
-        priority: Optional[str] = Field(None, description="Filter by priority (LOW, MEDIUM, HIGH)"),
-        limit: int = Field(10, description="Maximum number of requests to return")
+        status: Optional[str] = _REQUEST_STATUS_FILTER_FIELD,
+        priority: Optional[str] = _REQUEST_PRIORITY_FILTER_FIELD,
+        limit: int = _REQUEST_LIMIT_FIELD,
     ) -> List[types.TextContent]:
         """List all tool requests with optional filtering."""
         query = """
@@ -381,7 +470,9 @@ class ToolProposalMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -400,7 +491,7 @@ class ToolProposalMixin:
                     for r in results:
                         text += f"| {r.get('id', 'N/A')[:8]}... | {r.get('priority', 'MEDIUM')} | {r.get('status', 'Unknown')} | {r.get('timestamp', 'Unknown')[:10]} | {r.get('description', 'No description')[:50]}... |\n"
 
-                    text += "\nTo view full details of a request, use `get_tool_request(id=\"request-id\")`"
+                    text += '\nTo view full details of a request, use `get_tool_request(id="request-id")`'
 
                     return [types.TextContent(type="text", text=text)]
                 else:
@@ -411,7 +502,11 @@ class ToolProposalMixin:
                         filters.append(f"priority '{priority}'")
 
                     filter_text = f" with {' and '.join(filters)}" if filters else ""
-                    return [types.TextContent(type="text", text=f"No tool requests found{filter_text}.")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No tool requests found{filter_text}."
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error listing tool requests: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]

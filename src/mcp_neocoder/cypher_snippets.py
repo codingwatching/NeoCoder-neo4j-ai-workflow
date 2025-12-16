@@ -7,13 +7,14 @@ in the Neo4j database.
 
 import json
 import logging
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import mcp.types as types
-from .event_loop_manager import safe_neo4j_session
 
 # from pydantic import Field
-from neo4j import AsyncManagedTransaction, AsyncDriver
+from neo4j import AsyncDriver, AsyncManagedTransaction
+
+from .event_loop_manager import safe_neo4j_session
 
 logger = logging.getLogger("mcp_neocoder.cypher_snippets")
 
@@ -21,7 +22,17 @@ logger = logging.getLogger("mcp_neocoder.cypher_snippets")
 class CypherSnippetMixin:
     """Mixin class providing Cypher snippet functionality for the Neo4jWorkflowServer."""
 
-    def __init__(self, database: Optional[str] = None, driver: Optional[AsyncDriver] = None, *args, **kwargs):
+    # Type hints explicitly defined to match PolymorphicAdapterMixin to avoid incompatible definition errors
+    driver: Optional[AsyncDriver]
+    database: str = "neo4j"
+
+    def __init__(
+        self,
+        database: Optional[str] = None,
+        driver: Optional[AsyncDriver] = None,
+        *args: Any,
+        **kwargs: Any,
+    ):
         """
         Initialize cypher snippet mixin with keyword arguments for inheritance compatibility.
 
@@ -33,21 +44,31 @@ class CypherSnippetMixin:
         #   self.driver: AsyncDriver
         #   self.database: Optional[str]
         if not hasattr(self, "database"):
-            self.database = database
+            self.database = database or "neo4j"
         if not hasattr(self, "driver"):
             self.driver = driver
 
         super().__init__(*args, **kwargs)
 
-    async def _read_query(self, tx: AsyncManagedTransaction, query: str, params: dict[str, object]) -> str:
+    async def _read_query(
+        self, tx: AsyncManagedTransaction, query: str, params: dict[str, object]
+    ) -> str:
         """Execute a read query and return results as JSON string."""
         raise NotImplementedError("_read_query must be implemented by the parent class")
 
-    async def _write(self, tx: AsyncManagedTransaction, query: str, params: dict):
+    async def _write(
+        self, tx: AsyncManagedTransaction, query: str, params: dict[str, Any]
+    ) -> str:
         """Execute a write query and return results as JSON string."""
         raise NotImplementedError("_write must be implemented by the parent class")
 
-    async def list_cypher_snippets(self, limit: int = 20, offset: int = 0, tag: Optional[str] = None, since_version: Optional[float] = None) -> List[types.TextContent]:
+    async def list_cypher_snippets(
+        self,
+        limit: int = 20,
+        offset: int = 0,
+        tag: Optional[str] = None,
+        since_version: Optional[float] = None,
+    ) -> List[types.TextContent]:
         """List all available Cypher snippets with optional filtering."""
         # Ensure limit and offset are integers
         limit = int(limit)
@@ -85,7 +106,9 @@ class CypherSnippetMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database or "") as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -94,7 +117,11 @@ class CypherSnippetMixin:
                     if tag:
                         text += "Filtered by tag: `{}`\n\n".format(tag)
                     if since_version is not None:
-                        text += "Compatible with Neo4j version: {} and newer\n\n".format(since_version)
+                        text += (
+                            "Compatible with Neo4j version: {} and newer\n\n".format(
+                                since_version
+                            )
+                        )
 
                     text += "| ID | Name | Since Version | Description |\n"
                     text += "| -- | ---- | ------------- | ----------- |\n"
@@ -104,7 +131,13 @@ class CypherSnippetMixin:
                             snippet.get("id", "N/A"),
                             snippet.get("name", "N/A"),
                             snippet.get("since", "N/A"),
-                            snippet.get("since", "N/A") if isinstance(snippet.get("since", None), (str, float, int)) else "N/A",
+                            (
+                                snippet.get("since", "N/A")
+                                if isinstance(
+                                    snippet.get("since", None), (str, float, int)
+                                )
+                                else "N/A"
+                            ),
                         )
 
                     return [types.TextContent(type="text", text=text)]
@@ -118,9 +151,19 @@ class CypherSnippetMixin:
                         filter_msg += " compatible with Neo4j {}".format(since_version)
 
                     if filter_msg:
-                        return [types.TextContent(type="text", text="No Cypher snippets found{}.".format(filter_msg))]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text="No Cypher snippets found{}.".format(filter_msg),
+                            )
+                        ]
                     else:
-                        return [types.TextContent(type="text", text="No Cypher snippets found in the database.")]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text="No Cypher snippets found in the database.",
+                            )
+                        ]
         except Exception as e:
             logger.error("Error listing Cypher snippets: {}".format(e))
             return [types.TextContent(type="text", text="Error: {}".format(e))]
@@ -142,7 +185,9 @@ class CypherSnippetMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database or "") as session:
-                results_json = await session.execute_read(self._read_query, query, {"id": id})
+                results_json = await session.execute_read(
+                    self._read_query, query, {"id": id}
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -158,19 +203,27 @@ class CypherSnippetMixin:
 
                     text += f"\n**Description:**\n{snippet.get('description', 'No description available.')}\n"
 
-                    text += f"\n**Syntax:**\n```cypher\n{snippet.get('syntax', '')}\n```\n"
+                    text += (
+                        f"\n**Syntax:**\n```cypher\n{snippet.get('syntax', '')}\n```\n"
+                    )
 
                     if snippet.get("example"):
                         text += f"\n**Example:**\n```cypher\n{snippet.get('example', '')}\n```\n"
 
                     return [types.TextContent(type="text", text=text)]
                 else:
-                    return [types.TextContent(type="text", text=f"No Cypher snippet found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No Cypher snippet found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error retrieving Cypher snippet: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    async def search_cypher_snippets(self, query_text: str, search_type: str = "text", limit: int = 10) -> List[types.TextContent]:
+    async def search_cypher_snippets(
+        self, query_text: str, search_type: str = "text", limit: int = 10
+    ) -> List[types.TextContent]:
         """Search for Cypher snippets by keyword, tag, or pattern."""
         # Ensure limit is an integer
         limit = int(limit)
@@ -226,7 +279,9 @@ class CypherSnippetMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database or "") as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -241,7 +296,9 @@ class CypherSnippetMixin:
                         text += f"## {i}. {snippet.get('name', 'Unnamed Snippet')}{score_text}\n\n"
                         text += f"**ID:** `{snippet.get('id', 'unknown')}`\n"
                         text += f"**Description:** {snippet.get('description', 'No description')}\n"
-                        text += f"**Syntax:** `{snippet.get('syntax', 'No syntax')}`\n\n"
+                        text += (
+                            f"**Syntax:** `{snippet.get('syntax', 'No syntax')}`\n\n"
+                        )
 
                     view_details_msg = '\nUse `get_cypher_snippet(id="snippet-id")` to view full details of any result.'
                     text += view_details_msg
@@ -254,7 +311,16 @@ class CypherSnippetMixin:
             logger.error(f"Error searching Cypher snippets: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    async def create_cypher_snippet(self, id: str, name: str, syntax: str, description: str, example: Optional[str] = None, since: Optional[float] = None, tags: Optional[List[str]] = None) -> List[types.TextContent]:
+    async def create_cypher_snippet(
+        self,
+        id: str,
+        name: str,
+        syntax: str,
+        description: str,
+        example: Optional[str] = None,
+        since: Optional[float] = None,
+        tags: Optional[List[str]] = None,
+    ) -> List[types.TextContent]:
         """Add a new Cypher snippet to the database."""
         snippet_tags = tags or []
         snippet_since = since or 5.0  # Default to Neo4j 5.0 if not specified
@@ -295,15 +361,30 @@ class CypherSnippetMixin:
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
-                    success_msg = f"Successfully created Cypher snippet '{name}' with ID: {id}"
+                    success_msg = (
+                        f"Successfully created Cypher snippet '{name}' with ID: {id}"
+                    )
                     return [types.TextContent(type="text", text=success_msg)]
                 else:
-                    return [types.TextContent(type="text", text="Error creating Cypher snippet")]
+                    return [
+                        types.TextContent(
+                            type="text", text="Error creating Cypher snippet"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error creating Cypher snippet: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    async def update_cypher_snippet(self, id: str, name: Optional[str] = None, syntax: Optional[str] = None, description: Optional[str] = None, example: Optional[str] = None, since: Optional[float] = None, tags: Optional[List[str]] = None) -> List[types.TextContent]:
+    async def update_cypher_snippet(
+        self,
+        id: str,
+        name: Optional[str] = None,
+        syntax: Optional[str] = None,
+        description: Optional[str] = None,
+        example: Optional[str] = None,
+        since: Optional[float] = None,
+        tags: Optional[List[str]] = None,
+    ) -> List[types.TextContent]:
         """Update an existing Cypher snippet."""
         # Build dynamic SET clause based on provided parameters
         set_clauses = ["c.lastUpdated = date()"]
@@ -378,7 +459,9 @@ class CypherSnippetMixin:
 
         try:
             async with safe_neo4j_session(self.driver, self.database or "") as session:
-                results_json = await session.execute_write(self._write, query, {"id": id})
+                results_json = await session.execute_write(
+                    self._write, query, {"id": id}
+                )
                 results = json.loads(results_json)
 
                 if results and results[0].get("deleted", 0) > 0:

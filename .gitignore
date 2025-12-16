@@ -15,6 +15,7 @@ sdist/
 venv/
 env/
 ENV/
+.env
 # PyInstaller
 #  Often these are written to the same folder that contains the .py
 # source file

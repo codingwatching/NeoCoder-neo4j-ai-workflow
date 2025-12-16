@@ -6,26 +6,33 @@ This script demonstrates how to properly add new templates to the Neo4j database
 handling Neo4j version-specific constraints and transaction management.
 """
 
-import os
 import logging
+import os
 import time
-from pathlib import Path
-from neo4j import GraphDatabase
+from typing import Tuple
+
+from neo4j import Driver, GraphDatabase
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger("add_templates")
 
-def get_neo4j_connection():
+
+def get_neo4j_connection() -> Tuple[str, str, str, str]:
     """Get Neo4j connection details from environment variables or defaults."""
     uri = os.environ.get("NEO4J_URL", "bolt://localhost:7687")
     username = os.environ.get("NEO4J_USERNAME", "neo4j")
-    password = os.environ.get("NEO4J_PASSWORD", "password")  # Replace with actual password in production
+    password = os.environ.get(
+        "NEO4J_PASSWORD", "password"
+    )  # Replace with actual password in production
     database = os.environ.get("NEO4J_DATABASE", "neo4j")
 
     return uri, username, password, database
 
-def wait_for_neo4j(driver, database, max_attempts=5):
+
+def wait_for_neo4j(driver: Driver, database: str, max_attempts: int = 5) -> bool:
     """Wait for Neo4j to become available."""
     attempts = 0
     success = False
@@ -41,7 +48,9 @@ def wait_for_neo4j(driver, database, max_attempts=5):
         except Exception as e:
             attempts += 1
             wait_time = (1 + attempts) * 2
-            logger.warning(f"Failed to connect (attempt {attempts}/{max_attempts}). Waiting {wait_time} seconds...")
+            logger.warning(
+                f"Failed to connect (attempt {attempts}/{max_attempts}). Waiting {wait_time} seconds..."
+            )
             logger.debug(f"Error: {e}")
             time.sleep(wait_time)
 
@@ -52,7 +61,7 @@ def wait_for_neo4j(driver, database, max_attempts=5):
     return True
 
 
-def add_template_from_cypher(driver, database, cypher_path):
+def add_template_from_cypher(driver: Driver, database: str, cypher_path: str) -> bool:
     """
     Add a template from a Cypher file, breaking down complex operations into multiple transactions.
 
@@ -61,7 +70,7 @@ def add_template_from_cypher(driver, database, cypher_path):
     logger.info(f"Adding template from: {cypher_path}")
 
     # Read the Cypher file
-    with open(cypher_path, 'r') as f:
+    with open(cypher_path, "r") as f:
         full_query = f.read()
 
     # Simple version: direct execution (might fail with complex operations)
@@ -71,8 +80,10 @@ def add_template_from_cypher(driver, database, cypher_path):
             # Try to get a result if available, otherwise just log success
             try:
                 summary = result.consume()
-                logger.info(f"Template added successfully via direct execution. Nodes created: {summary.counters.nodes_created}")
-            except:
+                logger.info(
+                    f"Template added successfully via direct execution. Nodes created: {summary.counters.nodes_created}"
+                )
+            except Exception:
                 logger.info("Template added successfully via direct execution")
             return True
     except Exception as e:
@@ -113,7 +124,9 @@ def add_template_from_cypher(driver, database, cypher_path):
             template_result = session.run(template_query)
             template_record = template_result.single()
             if template_record:
-                logger.debug(f"Template node created/updated: {template_record['keyword']} v{template_record['version']}")
+                logger.debug(
+                    f"Template node created/updated: {template_record['keyword']} v{template_record['version']}"
+                )
 
             # 2. Then find the content section and update it separately
             steps_match = re.search(r"t.steps = \"(.*?)\"", full_query, re.DOTALL)
@@ -130,7 +143,9 @@ def add_template_from_cypher(driver, database, cypher_path):
                 steps_result = session.run(steps_query)
                 steps_record = steps_result.single()
                 if steps_record:
-                    logger.debug(f"Steps content updated for: {steps_record['keyword']}")
+                    logger.debug(
+                        f"Steps content updated for: {steps_record['keyword']}"
+                    )
 
             # 3. Finally create the relationship to the hub
             hub_query = f"""
@@ -144,7 +159,9 @@ def add_template_from_cypher(driver, database, cypher_path):
             if hub_record:
                 logger.debug(f"Hub relationship created for: {hub_record['keyword']}")
 
-            logger.info(f"Template {keyword} v{version} added successfully via multi-transaction approach")
+            logger.info(
+                f"Template {keyword} v{version} added successfully via multi-transaction approach"
+            )
             return True
 
     except Exception as e:
@@ -152,7 +169,7 @@ def add_template_from_cypher(driver, database, cypher_path):
         return False
 
 
-def main():
+def main() -> None:
     """Main function to add templates."""
     uri, username, password, database = get_neo4j_connection()
 
@@ -171,7 +188,7 @@ def main():
         # List of template files to add
         template_files = [
             os.path.join(templates_dir, "feature_template.cypher"),
-            os.path.join(templates_dir, "tool_add_template.cypher")
+            os.path.join(templates_dir, "tool_add_template.cypher"),
         ]
 
         # Add each template

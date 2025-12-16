@@ -18,36 +18,43 @@ import logging
 import os
 import sys
 import traceback
-from typing import Any, Dict, List, Optional, TypeVar, Awaitable
+from typing import Annotated, Any, Awaitable, Dict, List, Optional, TypeVar
 
 import mcp.types as types
-from mcp.server.fastmcp import FastMCP
-from neo4j import AsyncDriver, AsyncGraphDatabase, AsyncTransaction, AsyncManagedTransaction
 import neo4j
+from mcp.server.fastmcp import FastMCP
+from neo4j import (
+    AsyncDriver,
+    AsyncGraphDatabase,
+    AsyncManagedTransaction,
+    AsyncTransaction,
+)
 from pydantic import Field
 
 # Import mixins and core functionality
 from .action_templates import ActionTemplateMixin
 from .cypher_snippets import CypherSnippetMixin
-from .event_loop_manager import initialize_main_loop, safe_neo4j_session
+from .event_loop_manager import safe_neo4j_session
 from .init_db import init_db
 from .polymorphic_adapter import PolymorphicAdapterMixin
-from .tool_proposals import ToolProposalMixin
 
 # Import process management for cleanup
-from .process_manager import (
-    register_cleanup_handlers,
-    track_driver,
-    untrack_driver,
-    # track_session,
-    # untrack_session, # handled by safe_neo4j_session
-    track_background_task,
+from .process_manager import (  # track_session,; untrack_session, # handled by safe_neo4j_session
     cleanup_processes_sync,
     get_cleanup_status,
+    register_cleanup_handlers,
+    track_background_task,
+    track_driver,
+    untrack_driver,
 )
+from .tool_proposals import ToolProposalMixin
 
 # Configure logging to stderr for MCP servers
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", stream=sys.stderr)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stderr,
+)
 logger = logging.getLogger("mcp_neocoder")
 
 # Type definitions for function return handling
@@ -60,19 +67,25 @@ def async_to_sync(func: Awaitable[T]) -> T:
     return loop.run_until_complete(func)
 
 
-class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolProposalMixin, ActionTemplateMixin):
+class Neo4jWorkflowServer(
+    PolymorphicAdapterMixin, CypherSnippetMixin, ToolProposalMixin, ActionTemplateMixin
+):
     # Qdrant client for vector search (optional, injected at startup)
     qdrant_client: Optional[Any] = None
     """Server for Neo4j-guided AI workflow with polymorphic incarnation support."""
 
-    def __init__(self, driver: Optional[AsyncDriver] = None, database: str = "neo4j", loop: Optional[asyncio.AbstractEventLoop] = None, connection_details: Optional[Dict[str, str]] = None, *args: Any, **kwargs: Any):
+    def __init__(
+        self,
+        driver: Optional[AsyncDriver] = None,
+        database: str = "neo4j",
+        connection_details: Optional[Dict[str, str]] = None,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
         """Initialize the workflow server with Neo4j connection."""
         # CRITICAL: Register cleanup handlers first
         register_cleanup_handlers()
         logger.info("Cleanup handlers registered")
-
-        # Use the provided loop or initialize a new one
-        self.loop: asyncio.AbstractEventLoop = loop if loop is not None else initialize_main_loop()
 
         # Store connection info
         self.driver: Optional[AsyncDriver] = driver
@@ -85,7 +98,10 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
 
         # Initialize parent classes with required parameters
         # CypherSnippetMixin requires database and driver
-        super().__init__(driver=driver, database=database, *args, **kwargs)
+        super().__init__(*args, driver=driver, database=database, **kwargs)
+
+        # Store the loop if provided
+        self.loop: Optional[asyncio.AbstractEventLoop] = kwargs.get("loop")
 
         # Initialize FastMCP server
         self.mcp: FastMCP = FastMCP("mcp-neocoder", dependencies=["neo4j", "pydantic"])
@@ -106,7 +122,7 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
 
         tool_registry.register_tools_with_server(self)
 
-    def __del__(self):
+    def __del__(self) -> None:
         """Destructor to ensure cleanup when server instance is destroyed."""
         try:
             if hasattr(self, "driver"):
@@ -115,7 +131,7 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
         except Exception as e:
             logger.debug(f"Error in destructor: {e}")
 
-    async def cleanup(self):
+    async def cleanup(self) -> None:
         """Explicit cleanup method for the server."""
         logger.info("Starting server cleanup...")
         try:
@@ -144,7 +160,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
             response += f"- **Cleanup Registered**: {status['cleanup_registered']}\n"
 
             if status["process_ids"]:
-                response += f"\n**Tracked Process IDs**: {', '.join(status['process_ids'])}\n"
+                response += (
+                    f"\n**Tracked Process IDs**: {', '.join(status['process_ids'])}\n"
+                )
 
             # Add server-specific info
             response += "\n## Server Status\n"
@@ -152,7 +170,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
             response += f"- **Database**: {self.database}\n"
 
             if hasattr(self, "incarnation_registry"):
-                response += f"- **Incarnations Loaded**: {len(self.incarnation_registry)}\n"
+                response += (
+                    f"- **Incarnations Loaded**: {len(self.incarnation_registry)}\n"
+                )
 
             return [types.TextContent(type="text", text=response)]
 
@@ -160,13 +180,15 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
             logger.error(f"Error getting cleanup status: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    async def _ensure_driver(self):
+    async def _ensure_driver(self) -> None:
         """Ensure the Neo4j driver is initialized on the current event loop."""
         if self.driver is not None:
             return
 
         if not self.connection_details:
-            raise RuntimeError("No connection details provided for lazy driver initialization")
+            raise RuntimeError(
+                "No connection details provided for lazy driver initialization"
+            )
 
         logger.info("Initializing Neo4j driver lazily...")
         try:
@@ -174,18 +196,36 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
             username = self.connection_details["username"]
             password = self.connection_details["password"]
 
-            driver_config = {"max_connection_pool_size": int(os.environ.get("NEO4J_MAX_CONNECTIONS", "50")), "max_transaction_retry_time": 30.0, "connection_acquisition_timeout": 60.0}
+            driver_config = {
+                "max_connection_pool_size": int(
+                    os.environ.get("NEO4J_MAX_CONNECTIONS", "50")
+                ),
+                "max_transaction_retry_time": 30.0,
+                "connection_acquisition_timeout": 60.0,
+            }
 
-            self.driver = AsyncGraphDatabase.driver(db_url, auth=(username, password), max_connection_pool_size=driver_config["max_connection_pool_size"], max_transaction_retry_time=driver_config["max_transaction_retry_time"], connection_acquisition_timeout=driver_config["connection_acquisition_timeout"])
+            self.driver = AsyncGraphDatabase.driver(
+                db_url,
+                auth=(username, password),
+                max_connection_pool_size=driver_config["max_connection_pool_size"],
+                max_transaction_retry_time=driver_config["max_transaction_retry_time"],
+                connection_acquisition_timeout=driver_config[
+                    "connection_acquisition_timeout"
+                ],
+            )
 
             track_driver(self.driver)
 
             # Verify connection
-            async with safe_neo4j_session(self.driver, self.database) as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 result = await session.run("RETURN 1 as n")
                 data = await result.data()
                 if not data or data[0]["n"] != 1:
-                    raise RuntimeError("Driver verification failed: unexpected response")
+                    raise RuntimeError(
+                        "Driver verification failed: unexpected response"
+                    )
 
             logger.info("Neo4j driver initialized and verified successfully")
 
@@ -201,9 +241,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
 
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")
-            raise RuntimeError(f"Could not connect to Neo4j: {e}")
+            raise RuntimeError(f"Could not connect to Neo4j: {e}") from e
 
-    async def _initialize_async(self):
+    async def _initialize_async(self) -> None:
         """Execute the complete initialization sequence asynchronously."""
         try:
             await self._ensure_driver()
@@ -211,7 +251,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
             # 1. Run async database initialization
             db_init_success = await self._initialize_database()
             if not db_init_success:
-                logger.warning("Database initialization failed, some features may not work")
+                logger.warning(
+                    "Database initialization failed, some features may not work"
+                )
             else:
                 logger.info("Database initialization completed successfully")
 
@@ -223,9 +265,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
             self._load_incarnations()
             logger.info("Incarnations loaded")
 
-            # 5. Register incarnation-specific tools (async)
-            tool_count = await self._register_all_incarnation_tools()
-            logger.info(f"Registered {tool_count} tools from all incarnations")
+            # 5. Register initial incarnation tools (async)
+            await self._register_initial_incarnation()
+            logger.info("Registered initial incarnation tools")
 
             # Set the initialized event to signal completion
             self.initialized_event.set()
@@ -264,7 +306,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
 
         except Exception as e:
             logger.error(f"Database initialization check failed: {str(e)}")
-            logger.debug(f"Database initialization error details: {traceback.format_exc()}")
+            logger.debug(
+                f"Database initialization error details: {traceback.format_exc()}"
+            )
 
             # Attempt recovery by running initialization anyway
             try:
@@ -273,7 +317,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
                 logger.info("Database initialization successful after error recovery")
                 return True
             except Exception as recovery_err:
-                logger.error(f"Database initialization failed during recovery: {str(recovery_err)}")
+                logger.error(
+                    f"Database initialization failed during recovery: {str(recovery_err)}"
+                )
                 return False
 
     async def _check_database_initialized(self) -> bool:
@@ -284,9 +330,14 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
         """
 
         try:
-            async with safe_neo4j_session(self.driver, self.database or "neo4j") as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 # 1. Check if main hub exists
-                hub_exists = await self._check_component_exists(session, "MATCH (hub:AiGuidanceHub {id: 'main_hub'}) RETURN count(hub) > 0 as exists")
+                hub_exists = await self._check_component_exists(
+                    session,
+                    "MATCH (hub:AiGuidanceHub {id: 'main_hub'}) RETURN count(hub) > 0 as exists",
+                )
 
                 if not hub_exists:
                     return False
@@ -305,7 +356,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
                     return False
 
                 # 3. Check if action templates exist
-                templates_exist = await self._check_component_exists(session, "MATCH (t:ActionTemplate) RETURN count(t) > 0 as exists")
+                templates_exist = await self._check_component_exists(
+                    session, "MATCH (t:ActionTemplate) RETURN count(t) > 0 as exists"
+                )
 
                 return templates_exist
 
@@ -313,7 +366,9 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
             logger.error(f"Error checking database initialization: {str(e)}")
             return False
 
-    async def _check_component_exists(self, session, query: str) -> bool:
+    async def _check_component_exists(
+        self, session: neo4j.AsyncSession, query: str
+    ) -> bool:
         """Execute a boolean check query and return the result.
 
         Args:
@@ -324,13 +379,17 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
             bool: Whether the component exists
         """
         try:
-            result = await session.execute_read(lambda tx: self._execute_boolean_query(tx, query, {}))
-            return result
+            result = await session.execute_read(
+                lambda tx: self._execute_boolean_query(tx, query, {})
+            )
+            return bool(result)
         except Exception as e:
             logger.debug(f"Component check failed: {str(e)}")
             return False
 
-    async def _execute_boolean_query(self, tx: AsyncTransaction, query: str, params: dict) -> bool:
+    async def _execute_boolean_query(
+        self, tx: AsyncTransaction, query: str, params: dict
+    ) -> bool:
         """Execute a query that returns a boolean result.
 
         Args:
@@ -341,9 +400,7 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
         Returns:
             bool: Query result
         """
-        from typing import cast, LiteralString
-
-        result = await tx.run(cast(LiteralString, query), params)
+        result = await tx.run(query, params)
         records = await result.values()
 
         if not records or not records[0]:
@@ -351,64 +408,96 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
 
         return bool(records[0][0])
 
-    def _register_core_tools(self):
+    def _register_core_tools(self) -> None:
         """Register all core tools with the ToolRegistry.
 
         Core tools are those that don't depend on specific incarnations.
         """
+        # Register tools with the ToolRegistry instead of directly with MCP
+        from typing import Callable, cast
+
         from .tool_registry import registry as tool_registry
 
-        # Register tools with the ToolRegistry instead of directly with MCP
         # This prevents duplicate registration
-
         # Navigation tools
-        navigation_tools = [self.get_guidance_hub, self.list_action_templates, self.get_action_template, self.get_best_practices, self.suggest_tool]
+        navigation_tools = [
+            self.get_guidance_hub,
+            self.list_action_templates,
+            self.get_action_template,
+            self.get_best_practices,
+            self.suggest_tool,
+        ]
         for tool in navigation_tools:
-            tool_registry.register_tool(tool, "navigation")
+            tool_registry.register_tool(cast(Callable[..., Any], tool), "navigation")
 
         # Project tools
         project_tools = [self.get_project, self.list_projects]
         for tool in project_tools:
-            tool_registry.register_tool(tool, "project")
+            tool_registry.register_tool(cast(Callable[..., Any], tool), "project")
 
         # Workflow tools
-        workflow_tools = [self.log_workflow_execution, self.get_workflow_history, self.add_template_feedback]
+        workflow_tools = [
+            self.log_workflow_execution,
+            self.get_workflow_history,
+            self.add_template_feedback,
+        ]
         for tool in workflow_tools:
-            tool_registry.register_tool(tool, "workflow")
+            tool_registry.register_tool(cast(Callable[..., Any], tool), "workflow")
 
         # Query tools
         query_tools = [self.run_custom_query, self.write_neo4j_cypher]
         for tool in query_tools:
-            tool_registry.register_tool(tool, "query")
+            tool_registry.register_tool(cast(Callable[..., Any], tool), "query")
 
         # Cypher toolkit tools
-        cypher_tools = [self.list_cypher_snippets, self.get_cypher_snippet, self.search_cypher_snippets, self.create_cypher_snippet, self.update_cypher_snippet, self.delete_cypher_snippet, self.get_cypher_tags]
+        cypher_tools = [
+            self.list_cypher_snippets,
+            self.get_cypher_snippet,
+            self.search_cypher_snippets,
+            self.create_cypher_snippet,
+            self.update_cypher_snippet,
+            self.delete_cypher_snippet,
+            self.get_cypher_tags,
+        ]
         for tool in cypher_tools:
-            tool_registry.register_tool(tool, "cypher")
+            tool_registry.register_tool(cast(Callable[..., Any], tool), "cypher")
 
         # Tool proposal tools
-        proposal_tools = [self.propose_tool, self.request_tool, self.get_tool_proposal, self.get_tool_request, self.list_tool_proposals, self.list_tool_requests]
+        proposal_tools = [
+            self.propose_tool,
+            self.request_tool,
+            self.get_tool_proposal,
+            self.get_tool_request,
+            self.list_tool_proposals,
+            self.list_tool_requests,
+        ]
         for tool in proposal_tools:
-            tool_registry.register_tool(tool, "proposal")
+            tool_registry.register_tool(cast(Callable[..., Any], tool), "proposal")
 
         # Incarnation management tools
-        incarnation_tools = [self.get_current_incarnation, self.list_incarnations, self.switch_incarnation]
+        incarnation_tools = [
+            self.get_current_incarnation,
+            self.list_incarnations,
+            self.switch_incarnation,
+        ]
         for tool in incarnation_tools:
-            tool_registry.register_tool(tool, "incarnation")
+            tool_registry.register_tool(cast(Callable[..., Any], tool), "incarnation")
 
         # System monitoring tools
         monitoring_tools = [self.get_cleanup_status, self.check_connection]
         for tool in monitoring_tools:
-            tool_registry.register_tool(tool, "monitoring")
+            tool_registry.register_tool(cast(Callable[..., Any], tool), "monitoring")
 
+        # Log registration success
         logger.info("Registered all core tools with ToolRegistry")
 
-    def _load_incarnations(self):
+    def _load_incarnations(self) -> None:
         """Discover and load all available incarnations."""
         # Import the registry (deferred to avoid circular imports)
-        from .incarnation_registry import registry as global_registry
         import importlib
         import inspect
+
+        from .incarnation_registry import registry as global_registry
 
         # Force a re-discovery to ensure we get all classes
         logger.info("Discovering available incarnation classes")
@@ -416,12 +505,16 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
 
         # If incarnations is empty, try alternative discovery methods
         if not global_registry.incarnations:
-            logger.warning("No incarnations found via standard discovery. Trying alternative discovery methods.")
+            logger.warning(
+                "No incarnations found via standard discovery. Trying alternative discovery methods."
+            )
 
             # Try to find incarnations directly from files
             direct_incarnations = global_registry.discover_incarnations()
             if direct_incarnations:
-                logger.info(f"Found {len(direct_incarnations)} incarnations through filesystem scan")
+                logger.info(
+                    f"Found {len(direct_incarnations)} incarnations through filesystem scan"
+                )
 
                 # Manually load each incarnation file
                 for inc_type in direct_incarnations:
@@ -436,33 +529,55 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
 
                             # Find incarnation class in the module
                             for name, obj in inspect.getmembers(module):
-                                if inspect.isclass(obj) and obj.__module__ == full_module_path and name.endswith("Incarnation"):
+                                if (
+                                    inspect.isclass(obj)
+                                    and obj.__module__ == full_module_path
+                                    and name.endswith("Incarnation")
+                                ):
                                     # Set the name attribute if not present
                                     if not hasattr(obj, "name"):
-                                        logger.info(f"Setting name attribute for {name} to {inc_type}")
+                                        logger.info(
+                                            f"Setting name attribute for {name} to {inc_type}"
+                                        )
                                         obj.name = inc_type
 
                                     # Register the class
                                     global_registry.register(obj)
-                                    logger.info(f"Manually registered incarnation: {inc_type} ({name})")
+                                    logger.info(
+                                        f"Manually registered incarnation: {inc_type} ({name})"
+                                    )
                         except ImportError as ie:
-                            logger.error(f"Could not import module {full_module_path}: {ie}")
+                            logger.error(
+                                f"Could not import module {full_module_path}: {ie}"
+                            )
                     except Exception as e:
-                        logger.error(f"Error manually loading {inc_type} incarnation: {e}")
+                        logger.error(
+                            f"Error manually loading {inc_type} incarnation: {e}"
+                        )
                         logger.error(traceback.format_exc())
 
         # Register discovered incarnations with this server
         incarnation_count = 0
-        logger.info(f"Registering {len(global_registry.incarnations)} incarnations with server")
+        logger.info(
+            f"Registering {len(global_registry.incarnations)} incarnations with server"
+        )
 
         for name, inc_class in list(global_registry.incarnations.items()):
             try:
                 # Handle both string and enum names
-                name_str = name.value if hasattr(name, "value") and not isinstance(name, str) else str(name)
+                name_str = (
+                    name.value
+                    if hasattr(name, "value") and not isinstance(name, str)
+                    else str(name)
+                )
 
-                logger.info(f"Attempting to register incarnation: {name_str} ({inc_class.__name__})")
+                logger.info(
+                    f"Attempting to register incarnation: {name_str} ({inc_class.__name__})"
+                )
                 self.register_incarnation(name_str, inc_class)
-                logger.info(f"Registered incarnation: {name_str} ({inc_class.__name__})")
+                logger.info(
+                    f"Registered incarnation: {name_str} ({inc_class.__name__})"
+                )
                 incarnation_count += 1
 
                 # Create and store an instance for later use
@@ -476,11 +591,19 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
 
                     # Don't register tools here - they will be registered via ToolRegistry
                     # in _register_all_incarnation_tools to avoid duplicates
-                    tool_methods = instance.list_tool_methods() if hasattr(instance, "list_tool_methods") else []
-                    logger.info(f"Found {len(tool_methods)} tool methods in {name_str} (will register later)")
+                    tool_methods = (
+                        instance.list_tool_methods()
+                        if hasattr(instance, "list_tool_methods")
+                        else []
+                    )
+                    logger.info(
+                        f"Found {len(tool_methods)} tool methods in {name_str} (will register later)"
+                    )
 
                 except Exception as inst_err:
-                    logger.error(f"Failed to create instance of {inc_class.__name__}: {inst_err}")
+                    logger.error(
+                        f"Failed to create instance of {inc_class.__name__}: {inst_err}"
+                    )
             except Exception as e:
                 logger.error(f"Failed to register incarnation {name}: {str(e)}")
                 logger.error(traceback.format_exc())
@@ -490,17 +613,19 @@ class Neo4jWorkflowServer(PolymorphicAdapterMixin, CypherSnippetMixin, ToolPropo
         # If no incarnations were loaded, log a clear error
         if incarnation_count == 0:
             logger.error("NO INCARNATIONS WERE LOADED. This is a critical failure.")
-            logger.error("Check the incarnations directory and make sure incarnation classes are properly defined.")
+            logger.error(
+                "Check the incarnations directory and make sure incarnation classes are properly defined."
+            )
 
-    async def _register_basic_handlers(self):
+    async def _register_basic_handlers(self) -> None:
         """Register handlers for basic MCP protocol requests to prevent timeouts."""
 
         # Define the basic handlers
-        async def empty_list_handler():
+        async def empty_list_handler() -> List[Any]:
             """Return empty list for protocol handlers."""
             return []
 
-        async def default_guidance_hub_handler():
+        async def default_guidance_hub_handler() -> List[types.TextContent]:
             """Return basic guidance hub content in case database is not available."""
             content = """
 # NeoCoder Neo4j-Guided AI Workflow
@@ -522,14 +647,14 @@ Please wait a moment for full initialization to complete or check connection sta
                 # Set basic handlers for list endpoints
                 if hasattr(self.mcp, "list_prompts"):
 
-                    async def list_prompts_handler():
+                    async def list_prompts_handler() -> List[Any]:
                         return []
 
                     self.mcp.add_tool(list_prompts_handler, "list_prompts")
 
                 if hasattr(self.mcp, "list_resources"):
 
-                    async def list_resources_handler():
+                    async def list_resources_handler() -> List[Any]:
                         return []
 
                     self.mcp.add_tool(list_resources_handler, "list_resources")
@@ -537,25 +662,29 @@ Please wait a moment for full initialization to complete or check connection sta
                 # Also register a default guidance hub handler as a fallback
                 if hasattr(self.mcp, "add_tool"):
                     # Create a wrapper function that matches the tool signature
-                    async def guidance_hub_wrapper():
+                    async def guidance_hub_wrapper() -> List[types.TextContent]:
                         return await default_guidance_hub_handler()
 
                     # Only add this if get_guidance_hub isn't working yet
-                    self.mcp.add_tool(guidance_hub_wrapper, "get_guidance_hub_initializing")
+                    self.mcp.add_tool(
+                        guidance_hub_wrapper, "get_guidance_hub_initializing"
+                    )
 
-                logger.info("Registered basic protocol handlers via direct attribute assignment")
+                logger.info(
+                    "Registered basic protocol handlers via direct attribute assignment"
+                )
             except Exception as attr_err:
                 logger.warning(f"Could not set handlers via attributes: {attr_err}")
 
                 # Try alternative method - using the decorator interface if available
                 if hasattr(self.mcp, "list_prompts"):
 
-                    async def list_prompts_handler():
+                    async def list_prompts_handler() -> List[Any]:
                         return []
 
                     self.mcp.add_tool(list_prompts_handler, "list_prompts")
 
-                    async def list_resources_handler():
+                    async def list_resources_handler() -> List[Any]:
                         return []
 
                     self.mcp.add_tool(list_resources_handler, "list_resources")
@@ -572,12 +701,12 @@ Please wait a moment for full initialization to complete or check connection sta
             logger.error(f"Failed to register basic handlers: {e}")
             logger.info("Server will continue but may have reduced functionality")
 
-    async def _register_all_incarnation_tools(self):
-        """Register tools from all incarnations through the ToolRegistry."""
-        logger.info("Registering tools from all incarnations...")
+    async def _register_initial_incarnation(self) -> int:
+        """Register the initial incarnation and its tools."""
+        logger.info("Setting up initial incarnation...")
 
         if not self.incarnation_registry:
-            logger.warning("No incarnations registered, skipping tool registration")
+            logger.warning("No incarnations registered, skipping initial setup")
             return 0
 
         # Import the registries
@@ -586,10 +715,17 @@ Please wait a moment for full initialization to complete or check connection sta
 
         # Ensure incarnations are discovered
         if not self.incarnation_registry:
-            logger.warning("incarnation_registry is empty, trying to discover incarnations automatically")
+            logger.warning(
+                "incarnation_registry is empty, trying to discover incarnations automatically"
+            )
             global_registry.discover()
 
         # Clear any previously registered MCP tools to start fresh
+        # But preserve core tools - check if they are in _mcp_registered_tools?
+        # tool_registry._mcp_registered_tools.clear() # This might be too aggressive if core tools are there.
+        # Actually _register_core_tools calls tool_registry.register_tools_with_server(self) which adds to _mcp_registered_tools.
+        # If we clear it, we must re-register core tools.
+
         tool_registry._mcp_registered_tools.clear()
 
         # First register core tools with MCP
@@ -597,56 +733,63 @@ Please wait a moment for full initialization to complete or check connection sta
         core_count = tool_registry.register_tools_with_server(self)
         logger.info(f"Registered {core_count} core tools with MCP server")
 
-        # Process each incarnation
-        total_incarnation_tools = 0
-        logger.info(f"Processing {len(self.incarnation_registry)} incarnation types")
+        # Determine initial incarnation
+        # Default to 'coding' or the first available
+        initial_type = "coding"
+        available_types = list(self.incarnation_registry.keys())
 
-        for incarnation_type, incarnation_class in list(self.incarnation_registry.items()):
-            try:
-                logger.info(f"Processing incarnation: {incarnation_type}")
+        name_map = {}
+        for k in available_types:
+            key_str = (
+                k.value if hasattr(k, "value") and not isinstance(k, str) else str(k)
+            )
+            name_map[key_str] = k
 
-                # Get or create an instance
-                instance = global_registry.get_instance(incarnation_type, self.driver, self.database or "neo4j")
+        if initial_type not in name_map:
+            if available_types:
+                initial_type = list(name_map.keys())[0]
+            else:
+                logger.error("No incarnations available to select.")
+                return core_count
 
-                if not instance:
-                    logger.info(f"Creating new instance of {incarnation_type} incarnation")
-                    try:
-                        instance = incarnation_class(self.driver, self.database)
-                        # Store the instance for future use
-                        global_registry.instances[incarnation_type] = instance
-                    except Exception as instance_err:
-                        logger.error(f"Failed to create instance of {incarnation_class.__name__}: {instance_err}")
-                        continue
+        logger.info(f"Selected initial incarnation: {initial_type}")
 
-                # Register incarnation tools through the ToolRegistry
-                if instance:
-                    # Use the ToolRegistry's method to register incarnation tools
-                    count = tool_registry.register_incarnation_tools(instance, self)
-                    total_incarnation_tools += count
-                    logger.info(f"Registered {count} tools from {incarnation_type} incarnation")
-                else:
-                    logger.error(f"No instance available for {incarnation_type}")
+        try:
+            await self.set_incarnation(initial_type)
+            # The tool count is not returned by set_incarnation, but tools are registered.
+            return core_count  # + incarnation tools (unknown count)
+        except Exception as e:
+            logger.error(f"Failed to set initial incarnation {initial_type}: {e}")
+            logger.error(traceback.format_exc())
+            return core_count
 
-            except Exception as e:
-                logger.error(f"Error processing incarnation {incarnation_type}: {e}")
-                logger.error(traceback.format_exc())
+    async def _register_all_incarnation_tools(self) -> int:
+        """Register tools from all loaded incarnations.
 
-        # Log final summary
-        total_registered = core_count + total_incarnation_tools
-        logger.info(f"Tool registration complete. Total tools registered: {total_registered}")
-        logger.info(f"  - Core tools: {core_count}")
-        logger.info(f"  - Incarnation tools: {total_incarnation_tools}")
+        Returns:
+            int: Number of tools registered.
+        """
+        from .tool_registry import registry as tool_registry
 
-        return total_registered
+        return tool_registry.register_tools_with_server(self)
 
     async def get_current_incarnation(self) -> List[types.TextContent]:
         """Get the currently active incarnation type."""
         try:
             current = await self.get_current_incarnation_type()
             if current:
-                return [types.TextContent(type="text", text=f"Currently using '{current}' incarnation")]
+                return [
+                    types.TextContent(
+                        type="text", text=f"Currently using '{current}' incarnation"
+                    )
+                ]
             else:
-                return [types.TextContent(type="text", text="No incarnation is currently active. Use `switch_incarnation()` to set one.")]
+                return [
+                    types.TextContent(
+                        type="text",
+                        text="No incarnation is currently active. Use `switch_incarnation()` to set one.",
+                    )
+                ]
         except Exception as e:
             logger.error(f"Error getting current incarnation: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
@@ -656,15 +799,14 @@ Please wait a moment for full initialization to complete or check connection sta
         try:
             incarnations = []
             for inc_type, inc_class in self.incarnation_registry.items():
-                # Get the type value - handle both string and enum cases
-                type_value = inc_type
-                if hasattr(inc_type, "value") and not isinstance(inc_type, str):
-                    type_value = inc_type.value
-
                 incarnations.append(
                     {
-                        "type": type_value,
-                        "description": inc_class.description if hasattr(inc_class, "description") else "No description available",
+                        "type": inc_type,
+                        "description": (
+                            inc_class.description
+                            if hasattr(inc_class, "description")
+                            else "No description available"
+                        ),
                     }
                 )
 
@@ -684,14 +826,21 @@ Please wait a moment for full initialization to complete or check connection sta
 
                 return [types.TextContent(type="text", text=text)]
             else:
-                return [types.TextContent(type="text", text="No incarnations are registered")]
+                return [
+                    types.TextContent(
+                        type="text", text="No incarnations are registered"
+                    )
+                ]
         except Exception as e:
             logger.error(f"Error listing incarnations: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def switch_incarnation(
         self,
-        incarnation_type: str = Field(..., description="Type of incarnation to switch to (coding, research, decision, data_analysis, knowledge_graph)"),
+        incarnation_type: str = Field(
+            ...,
+            description="Type of incarnation to switch to (coding, research, decision, data_analysis, knowledge_graph)",
+        ),
     ) -> List[types.TextContent]:
         """Switch the server to a different incarnation."""
         try:
@@ -700,11 +849,21 @@ Please wait a moment for full initialization to complete or check connection sta
 
             if incarnation_type not in available_types:
                 available_types_str = ", ".join(available_types)
-                return [types.TextContent(type="text", text=f"Unknown incarnation type: '{incarnation_type}'. Available types: {available_types_str}")]
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=f"Unknown incarnation type: '{incarnation_type}'. Available types: {available_types_str}",
+                    )
+                ]
 
             # Set the incarnation using the string directly
             await self.set_incarnation(incarnation_type)
-            return [types.TextContent(type="text", text=f"Successfully switched to '{incarnation_type}' incarnation")]
+            return [
+                types.TextContent(
+                    type="text",
+                    text=f"Successfully switched to '{incarnation_type}' incarnation",
+                )
+            ]
         except Exception as e:
             logger.error(f"Error switching incarnation: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
@@ -748,7 +907,9 @@ Please wait a moment for full initialization to complete or check connection sta
 
     async def suggest_tool(
         self,
-        task_description: str = Field(..., description="Description of the task you're trying to accomplish"),
+        task_description: str = Field(
+            ..., description="Description of the task you're trying to accomplish"
+        ),
     ) -> list[types.TextContent]:
         """Suggest the appropriate tool based on a task description."""
         tools = self.get_tool_descriptions()
@@ -758,55 +919,255 @@ Please wait a moment for full initialization to complete or check connection sta
 
         # Define task patterns to match with tools
         task_patterns = {
-            "get_guidance_hub": ["where to start", "what should i do", "guidance", "help me", "not sure", "initial instructions"],
-            "get_action_template": ["how to fix", "steps to refactor", "deploy process", "template for", "get instructions"],
-            "list_action_templates": ["what actions", "available workflows", "what can i do", "available templates", "list workflows"],
-            "get_best_practices": ["best practices", "coding standards", "guidelines", "recommended approach"],
-            "get_project": ["project details", "about project", "project readme", "project information"],
-            "list_projects": ["what projects", "available projects", "list projects", "all projects"],
-            "log_workflow_execution": ["completed work", "task completed", "record execution", "log completion", "finished task"],
-            "get_workflow_history": ["past workflows", "execution history", "previous work", "task history"],
-            "add_template_feedback": ["improve template", "feedback about", "suggestion for workflow", "template issue"],
-            "run_custom_query": ["search for", "find", "query", "read data", "get data", "retrieve information"],
-            "write_neo4j_cypher": ["create new", "update", "modify", "delete", "write data", "change data"],
-            "check_connection": ["database connection", "connection issues", "connectivity", "database error"],
+            "get_guidance_hub": [
+                "where to start",
+                "what should i do",
+                "guidance",
+                "help me",
+                "not sure",
+                "initial instructions",
+            ],
+            "get_action_template": [
+                "how to fix",
+                "steps to refactor",
+                "deploy process",
+                "template for",
+                "get instructions",
+            ],
+            "list_action_templates": [
+                "what actions",
+                "available workflows",
+                "what can i do",
+                "available templates",
+                "list workflows",
+            ],
+            "get_best_practices": [
+                "best practices",
+                "coding standards",
+                "guidelines",
+                "recommended approach",
+            ],
+            "get_project": [
+                "project details",
+                "about project",
+                "project readme",
+                "project information",
+            ],
+            "list_projects": [
+                "what projects",
+                "available projects",
+                "list projects",
+                "all projects",
+            ],
+            "log_workflow_execution": [
+                "completed work",
+                "task completed",
+                "record execution",
+                "log completion",
+                "finished task",
+            ],
+            "get_workflow_history": [
+                "past workflows",
+                "execution history",
+                "previous work",
+                "task history",
+            ],
+            "add_template_feedback": [
+                "improve template",
+                "feedback about",
+                "suggestion for workflow",
+                "template issue",
+            ],
+            "run_custom_query": [
+                "search for",
+                "find",
+                "query",
+                "read data",
+                "get data",
+                "retrieve information",
+            ],
+            "write_neo4j_cypher": [
+                "create new",
+                "update",
+                "modify",
+                "delete",
+                "write data",
+                "change data",
+            ],
+            "check_connection": [
+                "database connection",
+                "connection issues",
+                "connectivity",
+                "database error",
+            ],
             # Cypher snippet toolkit patterns
-            "list_cypher_snippets": ["list cypher", "show snippets", "available cypher", "cypher commands"],
-            "get_cypher_snippet": ["get cypher", "show cypher snippet", "display cypher", "view snippet"],
-            "search_cypher_snippets": ["search cypher", "find cypher", "lookup cypher", "cypher syntax"],
-            "create_cypher_snippet": ["add cypher", "new cypher", "create snippet", "add snippet"],
-            "update_cypher_snippet": ["update cypher", "modify cypher", "change snippet", "edit cypher"],
+            "list_cypher_snippets": [
+                "list cypher",
+                "show snippets",
+                "available cypher",
+                "cypher commands",
+            ],
+            "get_cypher_snippet": [
+                "get cypher",
+                "show cypher snippet",
+                "display cypher",
+                "view snippet",
+            ],
+            "search_cypher_snippets": [
+                "search cypher",
+                "find cypher",
+                "lookup cypher",
+                "cypher syntax",
+            ],
+            "create_cypher_snippet": [
+                "add cypher",
+                "new cypher",
+                "create snippet",
+                "add snippet",
+            ],
+            "update_cypher_snippet": [
+                "update cypher",
+                "modify cypher",
+                "change snippet",
+                "edit cypher",
+            ],
             "delete_cypher_snippet": ["delete cypher", "remove cypher", "drop snippet"],
             "get_cypher_tags": ["cypher tags", "snippet categories", "snippet tags"],
             # Tool proposal patterns
-            "propose_tool": ["suggest tool", "propose tool", "new tool idea", "tool proposal", "implement tool"],
-            "request_tool": ["request tool", "need tool", "want tool", "tool feature request", "add functionality"],
-            "get_tool_proposal": ["view proposal", "see tool proposal", "proposal details", "proposed tool info"],
-            "get_tool_request": ["view request", "see tool request", "request details", "requested tool info"],
-            "list_tool_proposals": ["all proposals", "tool ideas", "proposed tools", "tool suggestions"],
-            "list_tool_requests": ["all requests", "requested tools", "tool requests", "feature requests"],
+            "propose_tool": [
+                "suggest tool",
+                "propose tool",
+                "new tool idea",
+                "tool proposal",
+                "implement tool",
+            ],
+            "request_tool": [
+                "request tool",
+                "need tool",
+                "want tool",
+                "tool feature request",
+                "add functionality",
+            ],
+            "get_tool_proposal": [
+                "view proposal",
+                "see tool proposal",
+                "proposal details",
+                "proposed tool info",
+            ],
+            "get_tool_request": [
+                "view request",
+                "see tool request",
+                "request details",
+                "requested tool info",
+            ],
+            "list_tool_proposals": [
+                "all proposals",
+                "tool ideas",
+                "proposed tools",
+                "tool suggestions",
+            ],
+            "list_tool_requests": [
+                "all requests",
+                "requested tools",
+                "tool requests",
+                "feature requests",
+            ],
             # Incarnation tools
-            "get_current_incarnation": ["what mode", "current incarnation", "what functionality", "active mode"],
-            "list_incarnations": ["available modes", "list incarnations", "system modes", "what can it do"],
-            "switch_incarnation": ["change mode", "switch to", "research mode", "coding mode", "decision mode"],
+            "get_current_incarnation": [
+                "what mode",
+                "current incarnation",
+                "what functionality",
+                "active mode",
+            ],
+            "list_incarnations": [
+                "available modes",
+                "list incarnations",
+                "system modes",
+                "what can it do",
+            ],
+            "switch_incarnation": [
+                "change mode",
+                "switch to",
+                "research mode",
+                "coding mode",
+                "decision mode",
+            ],
         }
 
         # Add research-specific patterns if in research mode- I think this may be redundant and should come from the incarnation itself.
         if current_incarnation == "research":
             research_patterns = {
-                "register_hypothesis": ["new hypothesis", "create hypothesis", "register hypothesis", "add hypothesis"],
-                "list_hypotheses": ["show hypotheses", "all hypotheses", "view hypotheses", "list hypotheses"],
-                "get_hypothesis": ["hypothesis details", "view hypothesis", "show hypothesis"],
-                "update_hypothesis": ["change hypothesis", "modify hypothesis", "update hypothesis"],
-                "create_protocol": ["new protocol", "create protocol", "design experiment", "experiment protocol"],
-                "list_protocols": ["show protocols", "all protocols", "view protocols", "list protocols"],
+                "register_hypothesis": [
+                    "new hypothesis",
+                    "create hypothesis",
+                    "register hypothesis",
+                    "add hypothesis",
+                ],
+                "list_hypotheses": [
+                    "show hypotheses",
+                    "all hypotheses",
+                    "view hypotheses",
+                    "list hypotheses",
+                ],
+                "get_hypothesis": [
+                    "hypothesis details",
+                    "view hypothesis",
+                    "show hypothesis",
+                ],
+                "update_hypothesis": [
+                    "change hypothesis",
+                    "modify hypothesis",
+                    "update hypothesis",
+                ],
+                "create_protocol": [
+                    "new protocol",
+                    "create protocol",
+                    "design experiment",
+                    "experiment protocol",
+                ],
+                "list_protocols": [
+                    "show protocols",
+                    "all protocols",
+                    "view protocols",
+                    "list protocols",
+                ],
                 "get_protocol": ["protocol details", "view protocol", "show protocol"],
-                "create_experiment": ["new experiment", "create experiment", "set up experiment"],
-                "list_experiments": ["show experiments", "all experiments", "view experiments", "list experiments"],
-                "record_observation": ["add observation", "record data", "log result", "add result", "record observation"],
-                "list_observations": ["show observations", "view data", "experiment data", "list observations"],
-                "compute_statistics": ["analyze results", "compute statistics", "statistical analysis", "data analysis"],
-                "create_publication_draft": ["draft paper", "publication draft", "create paper", "write up"],
+                "create_experiment": [
+                    "new experiment",
+                    "create experiment",
+                    "set up experiment",
+                ],
+                "list_experiments": [
+                    "show experiments",
+                    "all experiments",
+                    "view experiments",
+                    "list experiments",
+                ],
+                "record_observation": [
+                    "add observation",
+                    "record data",
+                    "log result",
+                    "add result",
+                    "record observation",
+                ],
+                "list_observations": [
+                    "show observations",
+                    "view data",
+                    "experiment data",
+                    "list observations",
+                ],
+                "compute_statistics": [
+                    "analyze results",
+                    "compute statistics",
+                    "statistical analysis",
+                    "data analysis",
+                ],
+                "create_publication_draft": [
+                    "draft paper",
+                    "publication draft",
+                    "create paper",
+                    "write up",
+                ],
             }
             task_patterns.update(research_patterns)
 
@@ -823,26 +1184,72 @@ Please wait a moment for full initialization to complete or check connection sta
         # If no matches, suggest based on common actions
         if not matches:
             # Check if task involves switching incarnations
-            if "switch" in task.lower() or "change" in task.lower() or "mode" in task.lower():
-                matches.append(("switch_incarnation", tools.get("switch_incarnation", "No description available")))
-                matches.append(("list_incarnations", tools.get("list_incarnations", "No description available")))
+            if (
+                "switch" in task.lower()
+                or "change" in task.lower()
+                or "mode" in task.lower()
+            ):
+                matches.append(
+                    (
+                        "switch_incarnation",
+                        tools.get("switch_incarnation", "No description available"),
+                    )
+                )
+                matches.append(
+                    (
+                        "list_incarnations",
+                        tools.get("list_incarnations", "No description available"),
+                    )
+                )
 
             # Check if in research mode and task is research-related
-            elif current_incarnation == "research" and ("hypothesis" in task.lower() or "experiment" in task.lower() or "research" in task.lower()):
+            elif current_incarnation == "research" and (
+                "hypothesis" in task.lower()
+                or "experiment" in task.lower()
+                or "research" in task.lower()
+            ):
                 if "create" in task.lower() or "new" in task.lower():
                     if "hypothesis" in task.lower():
-                        matches.append(("register_hypothesis", "Register a new scientific hypothesis"))
+                        matches.append(
+                            (
+                                "register_hypothesis",
+                                "Register a new scientific hypothesis",
+                            )
+                        )
                     elif "experiment" in task.lower():
-                        matches.append(("create_experiment", "Create a new experiment to test a hypothesis"))
+                        matches.append(
+                            (
+                                "create_experiment",
+                                "Create a new experiment to test a hypothesis",
+                            )
+                        )
                     elif "protocol" in task.lower():
-                        matches.append(("create_protocol", "Create an experimental protocol"))
-                elif "list" in task.lower() or "show" in task.lower() or "view" in task.lower():
+                        matches.append(
+                            ("create_protocol", "Create an experimental protocol")
+                        )
+                elif (
+                    "list" in task.lower()
+                    or "show" in task.lower()
+                    or "view" in task.lower()
+                ):
                     matches.append(("list_hypotheses", "List scientific hypotheses"))
                     matches.append(("list_experiments", "List experiments"))
             else:
                 # Default to guidance hub if no clear match
-                matches.append(("get_guidance_hub", tools.get("get_guidance_hub", "No description available")))
-                matches.append(("get_current_incarnation", tools.get("get_current_incarnation", "No description available")))
+                matches.append(
+                    (
+                        "get_guidance_hub",
+                        tools.get("get_guidance_hub", "No description available"),
+                    )
+                )
+                matches.append(
+                    (
+                        "get_current_incarnation",
+                        tools.get(
+                            "get_current_incarnation", "No description available"
+                        ),
+                    )
+                )
 
         # Format response
         response = "Based on your task description, here are the recommended tools:\n\n"
@@ -853,7 +1260,9 @@ Please wait a moment for full initialization to complete or check connection sta
             # Add example usage for the top match
             if tool == matches[0][0]:
                 if tool == "get_action_template":
-                    response += '\n  Example usage: `get_action_template(keyword="FIX")`\n'
+                    response += (
+                        '\n  Example usage: `get_action_template(keyword="FIX")`\n'
+                    )
                 elif tool == "get_project":
                     response += '\n  Example usage: `get_project(project_id="your_project_id")`\n'
                 elif tool == "run_custom_query":
@@ -908,13 +1317,19 @@ This is the default guidance hub. Use the commands above to explore the system's
         # 1. Try to get incarnation-specific hub if an incarnation is active
         if hasattr(self, "current_incarnation") and self.current_incarnation:
             try:
-                logger.info(f"Getting guidance hub from active incarnation: {self.current_incarnation.name}")
+                logger.info(
+                    f"Getting guidance hub from active incarnation: {self.current_incarnation.name}"
+                )
                 result = await self.current_incarnation.get_guidance_hub()
                 if result and isinstance(result, list) and len(result) > 0:
-                    return result
-                logger.warning("Empty result from incarnation hub, falling back to main hub")
+                    return list(result)
+                logger.warning(
+                    "Empty result from incarnation hub, falling back to main hub"
+                )
             except Exception as e:
-                logger.error(f"Error getting hub from incarnation {self.current_incarnation.name}: {str(e)}")
+                logger.error(
+                    f"Error getting hub from incarnation {self.current_incarnation.name}: {str(e)}"
+                )
                 logger.info("Falling back to main hub")
 
         # 2. Get the main hub with event loop safe session handling
@@ -922,14 +1337,16 @@ This is the default guidance hub. Use the commands above to explore the system's
 
         try:
             # Use the safe session manager to avoid event loop issues
-            async with safe_neo4j_session(self.driver, self.database or "neo4j") as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 query = """
                 MATCH (hub:AiGuidanceHub {id: 'main_hub'})
                 RETURN hub.description AS description
                 """
 
                 # Use a direct transaction to avoid scope issues
-                async def read_hub_description(tx):
+                async def read_hub_description(tx: AsyncTransaction) -> Any:
                     result = await tx.run(query)
                     values = await result.values()
                     return values
@@ -942,7 +1359,9 @@ This is the default guidance hub. Use the commands above to explore the system's
 
                     # Enhance with incarnation information
                     try:
-                        hub_content = await self._enhance_hub_with_incarnation_info(hub_content)
+                        hub_content = await self._enhance_hub_with_incarnation_info(
+                            hub_content
+                        )
                     except Exception as e:
                         logger.error(f"Error enhancing hub content: {str(e)}")
                         # Continue with unenhanced content
@@ -950,7 +1369,9 @@ This is the default guidance hub. Use the commands above to explore the system's
                     return [types.TextContent(type="text", text=hub_content)]
                 else:
                     # Hub doesn't exist or no description, create it
-                    logger.info("Main hub not found or has no description, creating default hub")
+                    logger.info(
+                        "Main hub not found or has no description, creating default hub"
+                    )
                     return await self._create_default_hub()
 
         except Exception as e:
@@ -980,10 +1401,8 @@ This is the default guidance hub. Use the commands above to explore the system's
             try:
                 # Extract information from registry
                 for inc_type, inc_class in self.incarnation_registry.items():
-                    # Convert to string if it's an enum
+                    # Keys are typed as str, so we can use them directly
                     inc_name = inc_type
-                    if hasattr(inc_type, "value") and not isinstance(inc_type, str):
-                        inc_name = inc_type.value
 
                     incarnation_types.append(inc_name)
 
@@ -1058,7 +1477,7 @@ This is the default guidance hub. Use the commands above to explore the system's
         """Check the Neo4j connection status and database access permissions."""
         from .event_loop_manager import safe_neo4j_session
 
-        result = {
+        result: Dict[str, Any] = {
             "connection": "Not Connected",
             "database": self.database,
             "read_access": False,
@@ -1083,10 +1502,14 @@ This is the default guidance hub. Use the commands above to explore the system's
                 raise RuntimeError("Driver is not initialized")
 
             # Test read access with a simple query using safe session manager
-            async with safe_neo4j_session(self.driver, self.database or "neo4j") as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 try:
                     # Test read access
-                    read_result = await session.run("RETURN 'Connection works' as status")
+                    read_result = await session.run(
+                        "RETURN 'Connection works' as status"
+                    )
                     read_data = await read_result.data()
                     if read_data and read_data[0]["status"] == "Connection works":
                         result["read_access"] = True
@@ -1099,7 +1522,9 @@ This is the default guidance hub. Use the commands above to explore the system's
 
                 try:
                     # Test write access with a harmless write operation
-                    write_result = await session.run("CREATE (t:TestNode {id: 'temp_test'}) WITH t DETACH DELETE t RETURN count(t) as deleted")
+                    write_result = await session.run(
+                        "CREATE (t:TestNode {id: 'temp_test'}) WITH t DETACH DELETE t RETURN count(t) as deleted"
+                    )
                     write_data = await write_result.data()
                     if write_data and write_data[0]["deleted"] == 1:
                         result["write_access"] = True
@@ -1113,11 +1538,15 @@ This is the default guidance hub. Use the commands above to explore the system's
 
                 # Get server info
                 try:
-                    info_result = await session.run("CALL dbms.components() YIELD name, versions RETURN name, versions[0] as version")
+                    info_result = await session.run(
+                        "CALL dbms.components() YIELD name, versions RETURN name, versions[0] as version"
+                    )
                     info_data = await info_result.data()
                     if info_data:
                         result["server_info"] = info_data
-                        logger.info(f"Server info retrieved: {len(info_data)} components")
+                        logger.info(
+                            f"Server info retrieved: {len(info_data)} components"
+                        )
                 except Exception as info_err:
                     logger.warning(f"Couldn't get server info: {info_err}")
                     # Don't set as primary error
@@ -1137,21 +1566,37 @@ This is the default guidance hub. Use the commands above to explore the system's
                 # Get registered tool count for each incarnation
                 if hasattr(self, "incarnation_registry") and self.incarnation_registry:
                     # Collect tool status information
-                    for inc_type, inc_class in self.incarnation_registry.items():
+                    for inc_type, _inc_class in self.incarnation_registry.items():
                         try:
                             # Get instance
-                            from .incarnation_registry import registry as global_registry
+                            from .incarnation_registry import (
+                                registry as global_registry,
+                            )
 
-                            instance = global_registry.get_instance(inc_type, self.driver, self.database or "neo4j")
+                            instance = global_registry.get_instance(
+                                inc_type, self.driver, self.database or "neo4j"
+                            )
                             if not instance:
                                 continue
 
                             # Get tool methods
                             tools = instance.list_tool_methods()
                             if tools:
-                                result["tools_registered"].append({"incarnation": inc_type, "tool_count": len(tools), "tools": tools[:5] + ["..."] if len(tools) > 5 else tools})
+                                result["tools_registered"].append(
+                                    {
+                                        "incarnation": inc_type,
+                                        "tool_count": len(tools),
+                                        "tools": (
+                                            tools[:5] + ["..."]
+                                            if len(tools) > 5
+                                            else tools
+                                        ),
+                                    }
+                                )
                         except Exception as tool_err:
-                            logger.warning(f"Error getting tool info for {inc_type}: {tool_err}")
+                            logger.warning(
+                                f"Error getting tool info for {inc_type}: {tool_err}"
+                            )
             except Exception as inc_err:
                 logger.warning(f"Error getting incarnation info: {inc_err}")
 
@@ -1179,7 +1624,9 @@ This is the default guidance hub. Use the commands above to explore the system's
         response += f"- **Write Access:** {result['write_access']}\n"
 
         if isinstance(result["server_info"], list):
-            server_info = ", ".join([f"{item['name']} {item['version']}" for item in result["server_info"]])
+            server_info = ", ".join(
+                [f"{item['name']} {item['version']}" for item in result["server_info"]]
+            )
             response += f"- **Neo4j Server:** [{server_info}]\n"
 
         if result["current_incarnation"] != "Unknown":
@@ -1196,7 +1643,9 @@ This is the default guidance hub. Use the commands above to explore the system's
 
         if result["error"]:
             response += f"\n## Error Details\n\n```\n{result['error']}\n```\n"
-            response += "This error may help with troubleshooting database connection issues.\n"
+            response += (
+                "This error may help with troubleshooting database connection issues.\n"
+            )
 
         response += "\n## Connection Settings\n\n"
         response += f"- **URL:** {result['neo4j_url']}\n"
@@ -1224,7 +1673,9 @@ This is the default guidance hub. Use the commands above to explore the system's
 
         return [types.TextContent(type="text", text=response)]
 
-    async def _read_query(self, tx: AsyncManagedTransaction, query: str, params: dict) -> str:
+    async def _read_query(
+        self, tx: AsyncManagedTransaction, query: str, params: dict
+    ) -> str:
         """Execute a read query and return results as JSON string.
 
         Args:
@@ -1236,9 +1687,7 @@ This is the default guidance hub. Use the commands above to explore the system's
             JSON string representing the query results
         """
         try:
-            from typing import cast, LiteralString
-
-            raw_results = await tx.run(cast(LiteralString, query), params or {})
+            raw_results = await tx.run(query, params or {})
             eager_results = await raw_results.to_eager_result()
             return json.dumps([r.data() for r in eager_results.records], default=str)
         except Exception as e:
@@ -1247,7 +1696,9 @@ This is the default guidance hub. Use the commands above to explore the system's
             logger.debug(f"Parameters: {params}")
             raise
 
-    async def _write(self, tx: AsyncManagedTransaction, query: str, params: dict):
+    async def _write(
+        self, tx: AsyncManagedTransaction, query: str, params: dict
+    ) -> Any:
         """Execute a write query and return result summary.
 
         Args:
@@ -1259,9 +1710,7 @@ This is the default guidance hub. Use the commands above to explore the system's
             Neo4j result summary
         """
         try:
-            from typing import cast, LiteralString
-
-            result = await tx.run(cast(LiteralString, query), params or {})
+            result = await tx.run(query, params or {})
             return await result.consume()
         except Exception as e:
             logger.error(f"Error executing write query: {str(e)}")
@@ -1269,7 +1718,9 @@ This is the default guidance hub. Use the commands above to explore the system's
             logger.debug(f"Parameters: {params}")
             raise
 
-    async def _safe_execute_read(self, query: str, params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    async def _safe_execute_read(
+        self, query: str, params: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
         """Execute a read query with proper error handling and transaction management.
 
         This is a higher-level method that handles session creation and error handling.
@@ -1286,15 +1737,17 @@ This is the default guidance hub. Use the commands above to explore the system's
         params = params or {}
 
         try:
-            async with safe_neo4j_session(self.driver, self.database or "neo4j") as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 # Execute inside a read transaction
                 result_json = await session.execute_read(
-                    lambda tx: self._read_query(tx, query, params)  # type: ignore
+                    lambda tx: self._read_query(tx, query, params)
                 )
 
                 # Parse the result safely
                 try:
-                    return json.loads(result_json)
+                    return list(json.loads(result_json))
                 except json.JSONDecodeError:
                     logger.error("Failed to decode JSON result")
                     return []
@@ -1302,7 +1755,9 @@ This is the default guidance hub. Use the commands above to explore the system's
             logger.error(f"Error in safe read execution: {str(e)}")
             return []
 
-    async def _safe_execute_write(self, query: str, params: Optional[Dict[str, Any]] = None) -> bool:
+    async def _safe_execute_write(
+        self, query: str, params: Optional[Dict[str, Any]] = None
+    ) -> bool:
         """Execute a write query with proper error handling and transaction management.
 
         This is a higher-level method that handles session creation and error handling.
@@ -1319,7 +1774,9 @@ This is the default guidance hub. Use the commands above to explore the system's
         params = params or {}
 
         try:
-            async with safe_neo4j_session(self.driver, self.database or "neo4j") as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 # Execute inside a write transaction
                 from typing import Callable
 
@@ -1361,49 +1818,103 @@ This is the default guidance hub. Use the commands above to explore the system's
 
         # Check for missing parentheses in node patterns
         if "(" in query and ")" not in query:
-            return False, "Syntax error: Missing closing parenthesis ')' in node pattern. Remember nodes should be defined with (node:Label)."
+            return (
+                False,
+                "Syntax error: Missing closing parenthesis ')' in node pattern. Remember nodes should be defined with (node:Label).",
+            )
 
         # Check for missing brackets in property access
         if "[" in query and "]" not in query:
-            return False, "Syntax error: Missing closing bracket ']' in property access or collection."
+            return (
+                False,
+                "Syntax error: Missing closing bracket ']' in property access or collection.",
+            )
 
         # Check for missing curly braces in property maps
         if "{" in query and "}" not in query:
-            return False, "Syntax error: Missing closing curly brace '}' in property map. Properties should be defined with {key: value}."
+            return (
+                False,
+                "Syntax error: Missing closing curly brace '}' in property map. Properties should be defined with {key: value}.",
+            )
 
         # Check for missing quotes in property strings
         quote_chars = ["'", '"', "`"]
         for char in quote_chars:
             if query.count(char) % 2 != 0:
-                return False, f"Syntax error: Unbalanced quotes ({char}). Make sure all string literals are properly enclosed."
+                return (
+                    False,
+                    f"Syntax error: Unbalanced quotes ({char}). Make sure all string literals are properly enclosed.",
+                )
 
         # Check for common cypher keywords
-        cypher_keywords = ["MATCH", "RETURN", "WHERE", "CREATE", "MERGE", "SET", "REMOVE", "DELETE", "WITH", "UNWIND", "ORDER BY", "LIMIT"]
+        cypher_keywords = [
+            "MATCH",
+            "RETURN",
+            "WHERE",
+            "CREATE",
+            "MERGE",
+            "SET",
+            "REMOVE",
+            "DELETE",
+            "WITH",
+            "UNWIND",
+            "ORDER BY",
+            "LIMIT",
+        ]
         if not any(keyword in query.upper() for keyword in cypher_keywords):
-            return False, "Warning: Query doesn't contain common Cypher keywords (MATCH, RETURN, CREATE, etc.). Please check your syntax."
+            return (
+                False,
+                "Warning: Query doesn't contain common Cypher keywords (MATCH, RETURN, CREATE, etc.). Please check your syntax.",
+            )
 
         # Check for RETURN in read queries or missing RETURN where needed
-        if "MATCH" in query.upper() and "RETURN" not in query.upper() and not self.is_write_query(query):
-            return False, "Syntax warning: MATCH queries typically need a RETURN clause to specify what to return from the matched patterns."
+        if (
+            "MATCH" in query.upper()
+            and "RETURN" not in query.upper()
+            and not self.is_write_query(query)
+        ):
+            return (
+                False,
+                "Syntax warning: MATCH queries typically need a RETURN clause to specify what to return from the matched patterns.",
+            )
 
         return True, "Query syntax appears valid."
 
-    async def run_custom_query(self, query: str = Field(..., description="Custom Cypher query to execute"), params: Optional[Dict[str, Any]] = Field(None, description="Query parameters")) -> List[types.TextContent]:
+    async def run_custom_query(
+        self,
+        query: Annotated[str, Field(description="Custom Cypher query to execute")],
+        params: Annotated[
+            Optional[Dict[str, Any]], Field(description="Query parameters")
+        ] = None,
+    ) -> List[types.TextContent]:
         """Run a custom Cypher query for advanced operations."""
         from .event_loop_manager import safe_neo4j_session
 
         params = params or {}
 
         try:
-            async with safe_neo4j_session(self.driver, self.database or "neo4j") as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 # Fixed: Use lambda directly without wrapping in Callable
-                results_json = await session.execute_read(lambda tx: self._read_query(tx, query, params))
+                results_json = await session.execute_read(
+                    lambda tx: self._read_query(tx, query, params)
+                )
                 return [types.TextContent(type="text", text=results_json)]
         except Exception as e:
             logger.error(f"Error executing custom query: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    async def write_neo4j_cypher(self, query: str = Field(..., description="Cypher query to execute (CREATE, DELETE, MERGE, etc.)"), params: Optional[Dict[str, Any]] = Field(None, description="Query parameters")) -> List[types.TextContent]:
+    async def write_neo4j_cypher(
+        self,
+        query: Annotated[
+            str,
+            Field(description="Cypher query to execute (CREATE, DELETE, MERGE, etc.)"),
+        ],
+        params: Annotated[
+            Optional[Dict[str, Any]], Field(description="Query parameters")
+        ] = None,
+    ) -> List[types.TextContent]:
         """Execute a WRITE Cypher query (for creating/updating data)."""
         from .event_loop_manager import safe_neo4j_session
 
@@ -1411,7 +1922,12 @@ This is the default guidance hub. Use the commands above to explore the system's
 
         # Check if this is actually a write query
         if not self.is_write_query(query):
-            return [types.TextContent(type="text", text="This does not appear to be a write query. Use run_custom_query() for read operations.")]
+            return [
+                types.TextContent(
+                    type="text",
+                    text="This does not appear to be a write query. Use run_custom_query() for read operations.",
+                )
+            ]
 
         # Analyze query syntax for common errors
         is_valid, message = self.analyze_cypher_syntax(query)
@@ -1419,17 +1935,25 @@ This is the default guidance hub. Use the commands above to explore the system's
             return [types.TextContent(type="text", text=message)]
 
         try:
-            async with safe_neo4j_session(self.driver, self.database or "neo4j") as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 # Fixed: Use lambda directly without wrapping in Callable
-                result = await session.execute_write(lambda tx: self._write(tx, query, params))
+                result = await session.execute_write(
+                    lambda tx: self._write(tx, query, params)
+                )
 
                 # Format a summary of what happened
                 response = "Query executed successfully.\n\n"
                 response += f"Nodes created: {result.counters.nodes_created}\n"
-                response += f"Relationships created: {result.counters.relationships_created}\n"
+                response += (
+                    f"Relationships created: {result.counters.relationships_created}\n"
+                )
                 response += f"Properties set: {result.counters.properties_set}\n"
                 response += f"Nodes deleted: {result.counters.nodes_deleted}\n"
-                response += f"Relationships deleted: {result.counters.relationships_deleted}\n"
+                response += (
+                    f"Relationships deleted: {result.counters.relationships_deleted}\n"
+                )
 
                 return [types.TextContent(type="text", text=response)]
         except Exception as e:
@@ -1492,14 +2016,16 @@ Each incarnation has its own set of specialized tools alongside the core Neo4j i
 
         try:
             # Try to create the hub node using safe session manager
-            async with safe_neo4j_session(self.driver, self.database or "neo4j") as session:
+            async with safe_neo4j_session(
+                self.driver, self.database or "neo4j"
+            ) as session:
                 query = """
                 CREATE (hub:AiGuidanceHub {id: 'main_hub', description: $description, created: datetime()})
                 RETURN hub.description AS description
                 """
 
                 # Use a direct transaction to avoid scope issues
-                async def create_hub(tx):
+                async def create_hub(tx: AsyncTransaction) -> Any:
                     result = await tx.run(query, {"description": default_description})
                     values = await result.values()
                     return values
@@ -1523,7 +2049,7 @@ Each incarnation has its own set of specialized tools alongside the core Neo4j i
             # Still try to return the content anyway to improve user experience
             return [types.TextContent(type="text", text=default_description)]
 
-    def initialize_server(self):
+    def initialize_server(self) -> bool:
         """Initialize the server properly without causing event loop issues.
 
         This is an alternative initialization method that can be used in scenarios
@@ -1544,7 +2070,9 @@ Each incarnation has its own set of specialized tools alongside the core Neo4j i
 
             # Register discovered incarnations with this server
             for inc_type, inc_class in global_registry.incarnations.items():
-                logger.info(f"Auto-registering incarnation {inc_type} ({inc_class.__name__})")
+                logger.info(
+                    f"Auto-registering incarnation {inc_type} ({inc_class.__name__})"
+                )
                 self.register_incarnation(inc_type, inc_class)
 
             # Register core tools
@@ -1559,7 +2087,7 @@ Each incarnation has its own set of specialized tools alongside the core Neo4j i
                 asyncio.set_event_loop(loop)
 
             # Run async initialization steps properly in the loop
-            async def run_async_init_wrapper():
+            async def run_async_init_wrapper() -> int:
                 """Wrap database initialization and tool registration in a single async function."""
                 # Auto-initialize the database if needed
                 await self._initialize_database()
@@ -1579,12 +2107,14 @@ Each incarnation has its own set of specialized tools alongside the core Neo4j i
             import traceback
 
             logger.error(traceback.format_exc())
-            logger.info("Basic MCP handlers are still registered, so the server will respond to protocol requests")
+            logger.info(
+                "Basic MCP handlers are still registered, so the server will respond to protocol requests"
+            )
             return False
 
-    def run(self, transport: str = "stdio"):
+    def run(self, transport: str = "stdio") -> None:
         """Run the MCP server."""
-        from typing import cast, Literal
+        from typing import Literal, cast
 
         # Schedule async initialization on the event loop
         if self.loop and self.loop.is_running():
@@ -1605,7 +2135,9 @@ Each incarnation has its own set of specialized tools alongside the core Neo4j i
         self.mcp.run(transport=cast(Literal["stdio", "sse"], transport))
 
 
-def create_server(db_url: str, username: str, password: str, database: str = "neo4j") -> Neo4jWorkflowServer:
+def create_server(
+    db_url: str, username: str, password: str, database: str = "neo4j"
+) -> Neo4jWorkflowServer:
     """Create and initialize a Neo4jWorkflowServer instance.
 
     This factory function handles proper initialization of the event loop,
@@ -1652,7 +2184,9 @@ def create_server(db_url: str, username: str, password: str, database: str = "ne
             qdrant_client = get_qdrant_client()
             logger.info("Qdrant client initialized successfully")
         except Exception as qdrant_err:
-            logger.warning(f"Qdrant not available or failed to initialize: {qdrant_err}")
+            logger.warning(
+                f"Qdrant not available or failed to initialize: {qdrant_err}"
+            )
             qdrant_client = None
 
         # 6. Create the server instance with connection details but NO driver yet
@@ -1661,7 +2195,11 @@ def create_server(db_url: str, username: str, password: str, database: str = "ne
             driver=None,  # Driver will be created lazily
             database=database,
             loop=loop,
-            connection_details={"url": db_url, "username": username, "password": password},
+            connection_details={
+                "url": db_url,
+                "username": username,
+                "password": password,
+            },
         )
 
         # If your server or vector-enabled classes need the client, set it here:
@@ -1671,16 +2209,18 @@ def create_server(db_url: str, username: str, password: str, database: str = "ne
             except Exception as e:
                 logger.warning(f"Failed to set qdrant_client on server: {e}")
 
-        logger.info("Neo4jWorkflowServer created successfully (driver will be initialized on startup)")
+        logger.info(
+            "Neo4jWorkflowServer created successfully (driver will be initialized on startup)"
+        )
         return server
 
     except Exception as e:
         logger.error(f"Failed to create server: {str(e)}")
         logger.debug(f"Server creation error details: {traceback.format_exc()}")
-        raise RuntimeError(f"Failed to create Neo4jWorkflowServer: {str(e)}")
+        raise RuntimeError(f"Failed to create Neo4jWorkflowServer: {str(e)}") from e
 
 
-def cleanup_zombie_instances():
+def cleanup_zombie_instances() -> int:
     """Clean up any orphaned server processes.
 
     This function identifies and terminates any zombie server instances
@@ -1696,7 +2236,7 @@ def cleanup_zombie_instances():
     return cleanup_zombies()
 
 
-def main():
+def main() -> None:
     """Main entry point for the MCP server.
 
     This function handles the complete server startup sequence:
@@ -1721,7 +2261,9 @@ def main():
             if env_loaded:
                 logger.info("Loaded environment variables from .env file")
         except ImportError:
-            logger.info("dotenv package not installed, using environment variables directly")
+            logger.info(
+                "dotenv package not installed, using environment variables directly"
+            )
 
         # 3. Set up logging based on environment configuration
         log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
@@ -1786,7 +2328,9 @@ def main():
 
 
 # Test functions to verify server operation
-async def test_server_initialization(db_url: str, username: str, password: str, database: str = "neo4j"):
+async def test_server_initialization(
+    db_url: str, username: str, password: str, database: str = "neo4j"
+) -> bool:
     """Test function to verify server initialization.
 
     This function creates a server instance and verifies:
@@ -1816,7 +2360,11 @@ async def test_server_initialization(db_url: str, username: str, password: str, 
             "max_connection_pool_size": 5,
         }
 
-        driver = AsyncGraphDatabase.driver(db_url, auth=(username, password), max_connection_pool_size=driver_config["max_connection_pool_size"])
+        driver = AsyncGraphDatabase.driver(
+            db_url,
+            auth=(username, password),
+            max_connection_pool_size=driver_config["max_connection_pool_size"],
+        )
 
         # Test connection
         logger.info("Testing Neo4j connection")
@@ -1831,7 +2379,7 @@ async def test_server_initialization(db_url: str, username: str, password: str, 
 
         # Create server instance
         logger.info("Creating test server instance")
-        server = Neo4jWorkflowServer(driver, database, loop)
+        server = Neo4jWorkflowServer(driver, database, loop=loop)
 
         # Test hub access
         logger.info("Testing guidance hub access")
@@ -1874,7 +2422,9 @@ if __name__ == "__main__":
         database = os.environ.get("NEO4J_DATABASE", "neo4j")
 
         # Run the test
-        test_result = asyncio.run(test_server_initialization(db_url, username, password, database))
+        test_result = asyncio.run(
+            test_server_initialization(db_url, username, password, database)
+        )
 
         if test_result:
             logger.info("Server test successful, exiting...")

@@ -13,10 +13,11 @@ import mcp.types as types
 
 logger = logging.getLogger("mcp_neocoder.tool_registry")
 
+
 class ToolRegistry:
     """Registry for managing and discovering tools."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize an empty tool registry."""
         self.tools: Dict[str, Callable] = {}
         self.tool_categories: Dict[str, Set[str]] = {}
@@ -48,7 +49,7 @@ class ToolRegistry:
 
         # Extract description from docstring
         if tool_func.__doc__:
-            self.tool_descriptions[tool_name] = tool_func.__doc__.split('\n')[0].strip()
+            self.tool_descriptions[tool_name] = tool_func.__doc__.split("\n")[0].strip()
             self.tool_full_docs[tool_name] = tool_func.__doc__.strip()
         else:
             self.tool_descriptions[tool_name] = f"{tool_name} tool"
@@ -69,21 +70,27 @@ class ToolRegistry:
         # Skip if class already registered
         class_id = f"{obj.__class__.__name__}@{id(obj)}"
         if class_id in self.registered_classes:
-            logger.debug(f"Class {obj.__class__.__name__} already registered, skipping.")
+            logger.debug(
+                f"Class {obj.__class__.__name__} already registered, skipping."
+            )
             return 0
 
         # Find all methods that return List[types.TextContent]
         count = 0
 
         # If the object has a list_tool_methods method, use that
-        if hasattr(obj, 'list_tool_methods') and callable(getattr(obj, 'list_tool_methods')):
+        if hasattr(obj, "list_tool_methods") and callable(obj.list_tool_methods):
             try:
                 tool_method_names = obj.list_tool_methods()
-                logger.info(f"Found {len(tool_method_names)} tools via list_tool_methods: {tool_method_names}")
+                logger.info(
+                    f"Found {len(tool_method_names)} tools via list_tool_methods: {tool_method_names}"
+                )
 
                 for name in tool_method_names:
                     if not hasattr(obj, name):
-                        logger.warning(f"Method {name} listed in list_tool_methods not found in {obj.__class__.__name__}")
+                        logger.warning(
+                            f"Method {name} listed in list_tool_methods not found in {obj.__class__.__name__}"
+                        )
                         continue
 
                     method = getattr(obj, name)
@@ -91,14 +98,20 @@ class ToolRegistry:
                         self.register_tool(method, category)
                         count += 1
                     else:
-                        logger.warning(f"Attribute {name} in {obj.__class__.__name__} is not callable")
+                        logger.warning(
+                            f"Attribute {name} in {obj.__class__.__name__} is not callable"
+                        )
             except Exception as e:
-                logger.error(f"Error using list_tool_methods for {obj.__class__.__name__}: {e}")
+                logger.error(
+                    f"Error using list_tool_methods for {obj.__class__.__name__}: {e}"
+                )
                 # Fall back to inspection
                 count += self._register_tools_by_inspection(obj, category)
         else:
             # Use inspection to find tool methods if no list_tool_methods
-            logger.info(f"No list_tool_methods found in {obj.__class__.__name__}, using inspection")
+            logger.info(
+                f"No list_tool_methods found in {obj.__class__.__name__}, using inspection"
+            )
             count = self._register_tools_by_inspection(obj, category)
 
         # Mark class as registered only if we found tools
@@ -121,19 +134,24 @@ class ToolRegistry:
         count = 0
         for name, method in inspect.getmembers(obj, inspect.ismethod):
             # Skip private methods and common base methods
-            if name.startswith('_') or name in ('initialize_schema', 'get_guidance_hub',
-                                              'register_tools', 'list_tool_methods',
-                                              '_read_query', '_write'):
+            if name.startswith("_") or name in (
+                "initialize_schema",
+                "get_guidance_hub",
+                "register_tools",
+                "list_tool_methods",
+                "_read_query",
+                "_write",
+            ):
                 continue
 
             # Check return type annotation if available
             tool_method = False
-            if hasattr(method, '__annotations__'):
-                return_type = method.__annotations__.get('return')
+            if hasattr(method, "__annotations__"):
+                return_type = method.__annotations__.get("return")
                 if return_type and (
-                    return_type == List[types.TextContent] or
-                    getattr(return_type, '__origin__', None) is list and
-                    getattr(return_type, '__args__', [None])[0] == types.TextContent
+                    return_type == List[types.TextContent]
+                    or getattr(return_type, "__origin__", None) is list
+                    and getattr(return_type, "__args__", [None])[0] == types.TextContent
                 ):
                     tool_method = True
 
@@ -153,9 +171,9 @@ class ToolRegistry:
         return count
 
     # Track registered tools at the class level using a set
-    _mcp_registered_tools = set()
+    _mcp_registered_tools: Set[str] = set()
 
-    def register_tools_with_server(self, server) -> int:
+    def register_tools_with_server(self, server: Any) -> int:
         """Register all tools with an MCP server.
 
         Args:
@@ -187,7 +205,7 @@ class ToolRegistry:
 
         return count
 
-    def register_incarnation_tools(self, incarnation_instance, server) -> int:
+    def register_incarnation_tools(self, incarnation_instance: Any, server: Any) -> int:
         """Register all tools from a specific incarnation with the MCP server.
 
         Args:
@@ -198,7 +216,9 @@ class ToolRegistry:
             The number of tools registered
         """
         if not incarnation_instance:
-            logger.warning("No incarnation instance provided, skipping tool registration")
+            logger.warning(
+                "No incarnation instance provided, skipping tool registration"
+            )
             return 0
 
         # Get the incarnation category
@@ -215,17 +235,26 @@ class ToolRegistry:
             import inspect
 
             # Check for methods with MCP tool signature
-            for name, method in inspect.getmembers(incarnation_instance, inspect.ismethod):
+            for name, method in inspect.getmembers(
+                incarnation_instance, inspect.ismethod
+            ):
                 # Skip private methods and inherited methods from BaseIncarnation
-                if (name.startswith('_') or
-                    name in ('initialize_schema', 'get_guidance_hub', 'register_tools', 'list_tool_methods')):
+                if name.startswith("_") or name in (
+                    "initialize_schema",
+                    "get_guidance_hub",
+                    "register_tools",
+                    "list_tool_methods",
+                ):
                     continue
 
                 # Check method signature
                 try:
                     inspect.signature(method)
                     # Check if this looks like a tool method (has type annotations)
-                    if hasattr(method, '__annotations__') and 'return' in method.__annotations__:
+                    if (
+                        hasattr(method, "__annotations__")
+                        and "return" in method.__annotations__
+                    ):
                         logger.info(f"Found potential tool method: {name}")
                         self.register_tool(method, category)
                         tool_count += 1
@@ -249,13 +278,73 @@ class ToolRegistry:
                         server.mcp.add_tool(tool_func)
                         # Add to our registry's set
                         self._mcp_registered_tools.add(registration_key)
-                        logger.info(f"Added tool '{tool_name}' from {category} to MCP server")
+                        logger.info(
+                            f"Added tool '{tool_name}' from {category} to MCP server"
+                        )
                         added_count += 1
                     except Exception as e:
-                        logger.error(f"Error adding tool '{tool_name}' to MCP server: {e}")
+                        logger.error(
+                            f"Error adding tool '{tool_name}' to MCP server: {e}"
+                        )
 
-        logger.info(f"Successfully registered {added_count} tools from {category} incarnation")
+        logger.info(
+            f"Successfully registered {added_count} tools from {category} incarnation"
+        )
         return added_count
+
+    def unregister_incarnation_tools(self, server: Any, category: str) -> int:
+        """Unregister all tools for a specific incarnation category.
+
+        Args:
+            server: The MCP server instance.
+            category: The category of tools to unregister.
+
+        Returns:
+            int: Number of tools unregistered.
+        """
+        removed_count = 0
+        tools_in_category = self.tool_categories.get(category, set())
+        logger.info(
+            f"Unregistering {len(tools_in_category)} tools for category '{category}'"
+        )
+
+        # Access the underlying tool manager if available (FastMCP specific)
+        tool_manager = getattr(server.mcp, "_tool_manager", None)
+        server_tools_dict = None
+
+        if tool_manager and hasattr(tool_manager, "_tools"):
+            server_tools_dict = tool_manager._tools
+            logger.debug("Accessing FastMCP tool manager for unregistration")
+        else:
+            logger.warning(
+                "Could not access FastMCP tool manager. Tools may not be fully removed from server."
+            )
+
+        for tool_name in list(tools_in_category):
+            if tool_name in self.tools:
+                tool_func = self.tools[tool_name]
+                registration_key = f"{tool_func.__module__}.{tool_func.__qualname__}"
+
+                # Remove from MCP server if possible
+                if server_tools_dict and tool_name in server_tools_dict:
+                    try:
+                        del server_tools_dict[tool_name]
+                        logger.debug(f"Removed '{tool_name}' from MCP server")
+                    except Exception as e:
+                        logger.error(
+                            f"Error removing '{tool_name}' from MCP server: {e}"
+                        )
+
+                # Remove from our registration tracking
+                self._mcp_registered_tools.discard(registration_key)
+                removed_count += 1
+
+        # Clear from local registry
+        self.clear_category(category)
+        logger.info(
+            f"Successfully unregistered {removed_count} tools for category '{category}'"
+        )
+        return removed_count
 
     def get_tools_by_category(self, category: str) -> List[Callable]:
         """Get all tools in a category.

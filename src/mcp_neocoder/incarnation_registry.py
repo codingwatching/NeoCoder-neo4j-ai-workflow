@@ -9,21 +9,24 @@ import importlib
 import inspect
 import logging
 import os
-from typing import Dict, Type, List, Optional, Any
+from typing import Any, Dict, List, Optional, Set, Type, cast
 
 from .incarnations.base_incarnation import BaseIncarnation
 
 logger = logging.getLogger("mcp_neocoder.incarnation_registry")
 
+
 class IncarnationRegistry:
     """Registry for managing incarnation classes."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize an empty incarnation registry."""
         self.incarnations: Dict[str, Type[BaseIncarnation]] = {}
         self.instances: Dict[str, BaseIncarnation] = {}
-        self.loaded_modules = set()
-        self.dynamic_types = {}  # Still needed for compatibility with existing code
+        self.loaded_modules: Set[str] = set()
+        self.dynamic_types: Dict[str, Any] = (
+            {}
+        )  # Still needed for compatibility with existing code
 
     def register(self, incarnation_class: Type[BaseIncarnation]) -> None:
         """Register an incarnation class with the registry.
@@ -32,19 +35,25 @@ class IncarnationRegistry:
             incarnation_class: The incarnation class to register.
         """
         # Check for name attribute
-        if hasattr(incarnation_class, 'name'):
-            incarnation_name = incarnation_class.name
+        if hasattr(incarnation_class, "name"):
+            incarnation_name = cast(Any, incarnation_class.name)
 
             # Convert to string if it's an enum or other object with value attribute
-            if not isinstance(incarnation_name, str) and hasattr(incarnation_name, 'value'):
+            if not isinstance(incarnation_name, str) and hasattr(
+                incarnation_name, "value"
+            ):
                 incarnation_name = incarnation_name.value
                 incarnation_class.name = incarnation_name
 
             # Register using the name
             self.incarnations[incarnation_name] = incarnation_class
-            logger.info(f"Registered incarnation: {incarnation_name} ({incarnation_class.__name__})")
+            logger.info(
+                f"Registered incarnation: {incarnation_name} ({incarnation_class.__name__})"
+            )
         else:
-            logger.warning(f"Cannot register {incarnation_class.__name__}: missing name attribute")
+            logger.warning(
+                f"Cannot register {incarnation_class.__name__}: missing name attribute"
+            )
 
     def get(self, incarnation: str) -> Optional[Type[BaseIncarnation]]:
         """Get an incarnation class by its type identifier.
@@ -57,7 +66,9 @@ class IncarnationRegistry:
         """
         return self.incarnations.get(incarnation)
 
-    def get_instance(self, incarnation: str, driver: Any, database: str) -> Optional[BaseIncarnation]:
+    def get_instance(
+        self, incarnation: str, driver: Any, database: str
+    ) -> Optional[BaseIncarnation]:
         """Get or create an incarnation instance.
 
         Args:
@@ -92,56 +103,11 @@ class IncarnationRegistry:
             {
                 "type": inc_type,
                 "name": inc_class.__name__,
-                "description": getattr(inc_class, 'description', "No description"),
-                "version": getattr(inc_class, 'version', "Unknown")
+                "description": getattr(inc_class, "description", "No description"),
+                "version": getattr(inc_class, "version", "Unknown"),
             }
             for inc_type, inc_class in self.incarnations.items()
         ]
-
-    def discover_dynamic_types(self) -> Dict[str, str]:
-        """Discover incarnation types from actual implementations.
-
-        This method scans all incarnation implementations and dynamically builds
-        a set of types without any hardcoded references.
-
-        Returns:
-            Dict mapping uppercase identifiers to type values
-        """
-        dynamic_types = {}
-
-        # Get the package directory
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        incarnations_dir = os.path.join(current_dir, "incarnations")
-
-        if not os.path.exists(incarnations_dir):
-            logger.warning(f"Incarnations directory not found: {incarnations_dir}")
-            return dynamic_types
-
-        # Simple discovery approach: scan for *_incarnation.py files
-        for entry in os.listdir(incarnations_dir):
-            if not entry.endswith('_incarnation.py') or entry.startswith('__'):
-                continue
-
-            # Skip base incarnation
-            if entry == 'base_incarnation.py':
-                continue
-
-            # Extract type from filename (e.g., "data_analysis" from "data_analysis_incarnation.py")
-            file_type = entry[:-14]  # Remove "_incarnation.py" (14 chars)
-            if file_type:
-                enum_name = file_type.upper()
-                dynamic_types[enum_name] = file_type
-                logger.info(f"Discovered incarnation type: {enum_name}={file_type}")
-
-                # Also add simplified versions for easier reference
-                if '_' in file_type:
-                    parts = file_type.split('_')
-                    simple_name = parts[0].upper()
-                    if simple_name != enum_name and simple_name not in dynamic_types:
-                        dynamic_types[simple_name] = file_type
-                        logger.info(f"Added simplified alias: {simple_name}={file_type}")
-
-        return dynamic_types
 
     def discover_incarnation_identifiers(self) -> Dict[str, str]:
         """Discover all incarnation identifiers from filenames.
@@ -152,24 +118,23 @@ class IncarnationRegistry:
         Returns:
             Dictionary of discovered incarnation identifiers
         """
-        # Build on top of the existing dynamic types discovery
-        discovered_types = self.discover_dynamic_types()
+        identifiers = {}
 
-        # Just return the values (actual identifiers) rather than the enum mapping
-        identifiers = {value: value for _, value in discovered_types.items()}
+        # Scan directory for modules
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        incarnations_dir = os.path.join(current_dir, "incarnations")
 
-        if not identifiers:
-            # Fallback to direct directory scan if no types were discovered
-            current_dir = os.path.dirname(os.path.abspath(__file__))
-            incarnations_dir = os.path.join(current_dir, "incarnations")
-
-            if os.path.exists(incarnations_dir):
-                for entry in os.listdir(incarnations_dir):
-                    if entry.endswith('_incarnation.py') and not entry.startswith('__') and entry != 'base_incarnation.py':
-                        # Extract identifier from filename
-                        inc_type = entry[:-14]  # Remove "_incarnation.py"
-                        identifiers[inc_type] = inc_type
-                        logger.info(f"Direct scan found incarnation: {inc_type}")
+        if os.path.exists(incarnations_dir):
+            for entry in os.listdir(incarnations_dir):
+                if (
+                    entry.endswith("_incarnation.py")
+                    and not entry.startswith("__")
+                    and entry != "base_incarnation.py"
+                ):
+                    # Extract identifier from filename
+                    inc_type = entry[:-15]  # Remove "_incarnation.py"
+                    identifiers[inc_type] = inc_type
+                    logger.info(f"Direct scan found incarnation: {inc_type}")
 
         logger.info(f"Discovered incarnation identifiers: {list(identifiers.keys())}")
         return identifiers
@@ -195,11 +160,11 @@ class IncarnationRegistry:
         # Process each incarnation file
         for entry in os.listdir(incarnations_dir):
             # Only process *_incarnation.py files
-            if not entry.endswith('_incarnation.py') or entry.startswith('__'):
+            if not entry.endswith("_incarnation.py") or entry.startswith("__"):
                 continue
 
             # Skip base incarnation
-            if entry == 'base_incarnation.py':
+            if entry == "base_incarnation.py":
                 continue
 
             module_name = entry[:-3]  # Remove .py extension
@@ -212,45 +177,57 @@ class IncarnationRegistry:
             # Import the module
             try:
                 # Use importlib to load the module
-                module = importlib.import_module(f"mcp_neocoder.incarnations.{module_name}")
+                module = importlib.import_module(
+                    f"mcp_neocoder.incarnations.{module_name}"
+                )
                 self.loaded_modules.add(module_name)
 
                 # Find all incarnation classes in the module
                 for name, obj in inspect.getmembers(module):
                     # Check if it's a class that inherits from BaseIncarnation
-                    if (inspect.isclass(obj) and
-                        issubclass(obj, BaseIncarnation) and
-                        obj is not BaseIncarnation):
+                    if (
+                        inspect.isclass(obj)
+                        and issubclass(obj, BaseIncarnation)
+                        and obj is not BaseIncarnation
+                    ):
 
                         # Check if it has either 'incarnation' or 'name' attribute
-                        if hasattr(obj, 'incarnation'):
+                        if hasattr(obj, "incarnation"):
                             # Get incarnation type as string (in case it's still an enum value)
-                            inc_type = getattr(obj, 'incarnation')
-                            if hasattr(inc_type, 'value'):  # Handle case where it might still be an enum
+                            inc_type = obj.incarnation
+                            if hasattr(
+                                inc_type, "value"
+                            ):  # Handle case where it might still be an enum
                                 inc_type = inc_type.value
 
-                            logger.info(f"Found incarnation class via 'incarnation' attribute: {name}, type: {inc_type}")
+                            logger.info(
+                                f"Found incarnation class via 'incarnation' attribute: {name}, type: {inc_type}"
+                            )
 
                             # Update the incarnation to be a string if it's not already
-                            if hasattr(inc_type, 'value'):
-                                setattr(obj, 'incarnation', inc_type)
+                            if hasattr(inc_type, "value"):
+                                obj.incarnation = inc_type
 
                             # Add a name attribute if it doesn't exist
-                            if not hasattr(obj, 'name'):
+                            if not hasattr(obj, "name"):
                                 obj.name = inc_type
 
                             self.register(obj)
-                        elif hasattr(obj, 'name'):
+                        elif hasattr(obj, "name"):
                             # Also register classes that have a 'name' but no 'incarnation' attribute
-                            logger.info(f"Found incarnation class via 'name' attribute: {name}, name: {obj.name}")
+                            logger.info(
+                                f"Found incarnation class via 'name' attribute: {name}, name: {obj.name}"
+                            )
 
                             # Add an incarnation attribute that matches the name for compatibility
-                            if not hasattr(obj, 'incarnation'):
-                                setattr(obj, 'incarnation', obj.name)
+                            if not hasattr(obj, "incarnation"):
+                                obj.incarnation = obj.name  # type: ignore
 
                             self.register(obj)
                         else:
-                            logger.warning(f"Skipping class {name} in {module_name}: missing both 'incarnation' and 'name' attributes")
+                            logger.warning(
+                                f"Skipping class {name} in {module_name}: missing both 'incarnation' and 'name' attributes"
+                            )
             except Exception as e:
                 logger.error(f"Error importing incarnation module {module_name}: {e}")
 
@@ -262,7 +239,7 @@ class IncarnationRegistry:
         Returns:
             A list of incarnation type identifiers found in the directory.
         """
-        incarnations = []
+        incarnations: List[str] = []
 
         # Get the package directory
         current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -291,7 +268,9 @@ class IncarnationRegistry:
 
         return incarnations
 
-    def create_template_incarnation(self, name: str, output_path: Optional[str] = None) -> str:
+    def create_template_incarnation(
+        self, name: str, output_path: Optional[str] = None
+    ) -> str:
         """Create a template incarnation file with the given name.
 
         Args:
@@ -302,19 +281,21 @@ class IncarnationRegistry:
             The path to the created file
         """
         # Convert any format to snake_case
-        name = name.lower().replace('-', '_').replace(' ', '_')
-        if not name.endswith('_incarnation'):
+        name = name.lower().replace("-", "_").replace(" ", "_")
+        if not name.endswith("_incarnation"):
             file_name = f"{name}_incarnation.py"
         else:
             file_name = f"{name}.py"
-            name = name.replace('_incarnation', '')
+            name = name.replace("_incarnation", "")
 
         # Generate type value - ensure it's in snake_case
         type_value = name
 
         # Generate class name - class name should ALWAYS match the filename
         # without the .py suffix, e.g., DataAnalysisIncarnation for data_analysis_incarnation.py
-        class_name = ''.join(word.capitalize() for word in name.split('_')) + 'Incarnation'
+        class_name = (
+            "".join(word.capitalize() for word in name.split("_")) + "Incarnation"
+        )
 
         # Determine output path
         if not output_path:
@@ -452,13 +433,14 @@ Each entity in the system has full tracking and audit capabilities.
 
         # Create the file
         try:
-            with open(output_path, 'w') as f:
+            with open(output_path, "w") as f:
                 f.write(template)
             logger.info(f"Created template incarnation file: {output_path}")
             return output_path
         except Exception as e:
             logger.error(f"Error creating template incarnation file: {e}")
             raise
+
 
 # Create a global registry instance
 registry = IncarnationRegistry()

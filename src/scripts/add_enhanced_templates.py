@@ -5,10 +5,12 @@ Integrates MVP Agent, Coder Agent, and Adaptive Engineering Lead protocols
 """
 
 import asyncio
-import json
+from typing import Any, Dict
+
 from neo4j import AsyncGraphDatabase
 
-async def add_enhanced_templates():
+
+async def add_enhanced_templates() -> None:
     """Add the enhanced action templates to Neo4j"""
 
     # Enhanced templates based on the protocols
@@ -63,7 +65,7 @@ async def add_enhanced_templates():
 8. **Phase 8: Deliverable Structure**
    - Present MVP outline with clear headings and actionable bullet points
    - Flag uncertainties and suggest validation areas
-   - Prioritize clarity and feasibility for MVP scope"""
+   - Prioritize clarity and feasibility for MVP scope""",
         },
         {
             "keyword": "META_CODE",
@@ -102,7 +104,7 @@ async def add_enhanced_templates():
 5. **⚠️ Fail-Safe Intelligence**
    - Avoid: Workaround scripts, oversimplification, premature solutions
    - Flag Uncertainty: Surface confidence level and assumptions
-   - Risk-Aware: Estimate impact level, guard against coupling effects"""
+   - Risk-Aware: Estimate impact level, guard against coupling effects""",
         },
         {
             "keyword": "PROJECT_LEAD",
@@ -134,16 +136,21 @@ async def add_enhanced_templates():
    - Collaborative Partner: Augment capabilities, proactive communication
    - Clarity & Conciseness: Clear explanations, avoid jargon
    - User-Centric: Prioritize goals and constraints
-   - Continuous Learning: Understand preferences and nuances"""
-        }
+   - Continuous Learning: Understand preferences and nuances""",
+        },
     ]
 
-    driver = AsyncGraphDatabase.driver("bolt://localhost:7687", auth=("neo4j", "00000000"))
+    driver = AsyncGraphDatabase.driver(
+        "bolt://localhost:7687", auth=("neo4j", "00000000")
+    )
 
     try:
         async with driver.session(database="neo4j") as session:
             for template in templates:
-                async def create_template(tx):
+
+                async def create_template(
+                    tx: Any, tpl: Dict[str, str] = template
+                ) -> Any:
                     query = """
                     CREATE (t:ActionTemplate {
                         keyword: $keyword,
@@ -157,7 +164,7 @@ async def add_enhanced_templates():
                         updated: datetime()
                     })
                     """
-                    return await tx.run(query, template)
+                    return await tx.run(query, tpl)
 
                 await session.execute_write(create_template)
                 print(f"✅ Created enhanced template: {template['keyword']}")
@@ -172,6 +179,7 @@ async def add_enhanced_templates():
         print(f"❌ Error adding templates: {e}")
     finally:
         await driver.close()
+
 
 if __name__ == "__main__":
     asyncio.run(add_enhanced_templates())

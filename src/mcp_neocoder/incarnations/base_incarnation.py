@@ -10,12 +10,7 @@ discovered and loaded without requiring central registration of types.
 
 import json
 import logging
-from typing import List, cast
-try:
-    from typing import LiteralString
-except ImportError:
-    # Fallback for Python < 3.11
-    LiteralString = str
+from typing import Any, Dict, List
 
 import mcp.types as types
 from neo4j import AsyncDriver, AsyncManagedTransaction
@@ -34,9 +29,7 @@ class BaseIncarnation(ActionTemplateMixin):
 
     # Optional schema creation scripts, format: List of Cypher queries to execute
     # Use ActionTemplateMixin's schema_queries for ActionTemplate constraints/indexes
-    from typing import Tuple
-
-    schema_queries: Tuple[str, ...] = tuple(ActionTemplateMixin.schema_queries)
+    schema_queries: List[str] = list(ActionTemplateMixin.schema_queries)
 
     # Hub content - comprehensive guidance hub for universal access
     hub_content: str = """
@@ -137,7 +130,7 @@ Available templates for diversity preservation:
         self.driver = driver
         self.database = database
 
-    async def initialize_schema(self):
+    async def initialize_schema(self) -> None:
         """Initialize the Neo4j schema for this incarnation."""
         from ..event_loop_manager import safe_neo4j_session
 
@@ -147,7 +140,8 @@ Available templates for diversity preservation:
                 async with safe_neo4j_session(self.driver, self.database) as session:
                     # Execute each constraint/index query individually
                     for query in self.schema_queries:
-                        await session.execute_write(lambda tx: tx.run(query).consume())  # type: ignore
+                        q = query  # Bind loop variable
+                        await session.execute_write(lambda tx, q=q: tx.run(q).consume())
 
                 # Create guidance hub if needed
                 await self.ensure_hub_exists()
@@ -163,7 +157,7 @@ Available templates for diversity preservation:
             # Still create the hub
             await self.ensure_hub_exists()
 
-    async def ensure_hub_exists(self):
+    async def ensure_hub_exists(self) -> None:
         """Create the guidance hub for this incarnation if it doesn't exist."""
         from ..event_loop_manager import safe_neo4j_session
 
@@ -191,13 +185,17 @@ Available templates for diversity preservation:
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
                 # Create universal base hub
-                await session.execute_write(lambda tx: tx.run(base_hub_query, {"description": self.hub_content}))
+                await session.execute_write(
+                    lambda tx: tx.run(base_hub_query, {"description": self.hub_content})
+                )
 
                 # Create incarnation-specific hub
-                await session.execute_write(lambda tx: tx.run(incarnation_hub_query, {
-                    "hub_id": hub_id,
-                    "description": self.hub_content
-                }))
+                await session.execute_write(
+                    lambda tx: tx.run(
+                        incarnation_hub_query,
+                        {"hub_id": hub_id, "description": self.hub_content},
+                    )
+                )
 
                 logger.info(f"Ensured base_hub and {self.name}_hub exist")
         except Exception as e:
@@ -223,7 +221,9 @@ Available templates for diversity preservation:
                 results = json.loads(results)
 
                 if results and len(results) > 0:
-                    return [types.TextContent(type="text", text=results[0]["description"])]
+                    return [
+                        types.TextContent(type="text", text=results[0]["description"])
+                    ]
                 else:
                     # If hub doesn't exist, create it
                     await self.ensure_hub_exists()
@@ -244,11 +244,15 @@ Available templates for diversity preservation:
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results = await session.execute_read(lambda tx: self._read_query(tx, query, {}))
+                results = await session.execute_read(
+                    lambda tx: self._read_query(tx, query, {})
+                )
                 results = json.loads(results)
 
                 if results and len(results) > 0:
-                    return [types.TextContent(type="text", text=results[0]["description"])]
+                    return [
+                        types.TextContent(type="text", text=results[0]["description"])
+                    ]
                 else:
                     # If base hub doesn't exist, create it
                     await self.ensure_hub_exists()
@@ -258,13 +262,14 @@ Available templates for diversity preservation:
             logger.error(f"Error retrieving base guidance hub: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
-    def list_tool_methods(self):
+    def list_tool_methods(self) -> List[str]:
         """List all methods in this class that appear to be tools.
 
         Returns:
             list: List of method names that appear to be tools
         """
         import inspect
+
         import mcp.types as types
 
         tool_methods = []
@@ -272,17 +277,21 @@ Available templates for diversity preservation:
         logger.debug(f"Checking methods in {self.__class__.__name__}")
 
         # First, check if there's a hardcoded base list of tools
-        if hasattr(self, '_tool_methods') and isinstance(self._tool_methods, list):
-            logger.info(f"Using predefined tool list for {self.__class__.__name__}: {self._tool_methods}")
+        if hasattr(self, "_tool_methods") and isinstance(self._tool_methods, list):
+            logger.info(
+                f"Using predefined tool list for {self.__class__.__name__}: {self._tool_methods}"
+            )
             for name in self._tool_methods:
                 if hasattr(self, name) and callable(getattr(self, name)):
                     tool_methods.append(name)
                 else:
-                    logger.warning(f"Predefined tool method {name} does not exist in {self.__class__.__name__}")
+                    logger.warning(
+                        f"Predefined tool method {name} does not exist in {self.__class__.__name__}"
+                    )
             return tool_methods
 
         # If no predefined list, use inspection to find tools
-        class_dict = {}
+        class_dict: Dict[str, Any] = {}
 
         # Collect methods from all parent classes
         for cls in self.__class__.__mro__:
@@ -292,13 +301,18 @@ Available templates for diversity preservation:
 
         # Skip these common non-tool methods
         excluded_methods = {
-            'initialize_schema', 'get_guidance_hub', 'register_tools',
-            'list_tool_methods', 'ensure_hub_exists', '_read_query', '_write'
+            "initialize_schema",
+            "get_guidance_hub",
+            "register_tools",
+            "list_tool_methods",
+            "ensure_hub_exists",
+            "_read_query",
+            "_write",
         }
 
         for name, method_obj in class_dict.items():
             # Skip private methods and excluded methods
-            if name.startswith('_') or name in excluded_methods:
+            if name.startswith("_") or name in excluded_methods:
                 continue
 
             # Check if it's an async method
@@ -309,35 +323,42 @@ Available templates for diversity preservation:
                 # Check return type annotation if available
                 is_tool = False
 
-                if hasattr(method, '__annotations__'):
-                    return_type = method.__annotations__.get('return')
+                if hasattr(method, "__annotations__"):
+                    return_type = method.__annotations__.get("return")
                     # Check for List[types.TextContent] return type
                     if return_type and (
-                        return_type == List[types.TextContent] or
-                        getattr(return_type, '__origin__', None) is list and
-                        getattr(return_type, '__args__', [None])[0] == types.TextContent
+                        return_type == List[types.TextContent]
+                        or getattr(return_type, "__origin__", None) is list
+                        and getattr(return_type, "__args__", [None])[0]
+                        == types.TextContent
                     ):
                         is_tool = True
-                        logger.debug(f"Identified tool method via return type annotation: {name}")
+                        logger.debug(
+                            f"Identified tool method via return type annotation: {name}"
+                        )
 
                 # Fallback: if it's an async method defined in the class itself (not inherited),
                 # and it has parameters, assume it's a tool
-                if not is_tool and hasattr(method, '__code__'):
+                if not is_tool and hasattr(method, "__code__"):
                     # Check if it has at least one parameter beyond 'self'
                     if method.__code__.co_argcount > 1:
                         is_tool = True
-                        logger.debug(f"Identified tool method via parameter count: {name}")
+                        logger.debug(
+                            f"Identified tool method via parameter count: {name}"
+                        )
 
                 if is_tool:
                     tool_methods.append(name)
 
-        logger.info(f"Found {len(tool_methods)} tool methods in {self.__class__.__name__} via inspection: {tool_methods}")
+        logger.info(
+            f"Found {len(tool_methods)} tool methods in {self.__class__.__name__} via inspection: {tool_methods}"
+        )
         return tool_methods
 
     # Track registered tools at the class level - using a class variable
-    _registered_tool_methods = set()
+    _registered_tool_methods: set[str] = set()
 
-    async def register_tools(self, server):
+    async def register_tools(self, server: Any) -> int:
         """Identify tool methods and register them with the central ToolRegistry."""
         # Get all tool methods from this incarnation
         tool_methods = self.list_tool_methods()
@@ -347,33 +368,37 @@ Available templates for diversity preservation:
         from ..tool_registry import registry as tool_registry
 
         # Let register_class_tools handle adding to the registry's internal structures
-        tools_added_to_registry_count = tool_registry.register_class_tools(self, self.name)
+        tools_added_to_registry_count = tool_registry.register_class_tools(
+            self, self.name
+        )
 
         # Log based on tools found and added to the registry
-        logger.info(f"{self.name} incarnation: {tools_added_to_registry_count} tools added to ToolRegistry")
+        logger.info(
+            f"{self.name} incarnation: {tools_added_to_registry_count} tools added to ToolRegistry"
+        )
 
         # Return the count of tools identified/added to registry
         return len(tool_methods)
 
-    async def _read_query(self, tx: AsyncManagedTransaction, query: str, params: dict) -> str:
+    async def _read_query(
+        self, tx: AsyncManagedTransaction, query: str, params: dict
+    ) -> str:
         """Execute a read query and return results as JSON string."""
         # Ensure params is a dict, even if None is passed
-        if params is None:
-            params = {}
-        result = await tx.run(cast(LiteralString, query), params)  # type: ignore
+        result = await tx.run(query, params)
         records = await result.data()
         return json.dumps(records)
 
-    async def _write(self, tx: AsyncManagedTransaction, query: str, params: dict):
+    async def _write(
+        self, tx: AsyncManagedTransaction, query: str, params: Dict[str, Any]
+    ) -> Any:
         """Execute a write query and return the summary object."""
         # Ensure params is a dict, even if None is passed
-        if params is None:
-            params = {}
-        result = await tx.run(cast(LiteralString, query), params)  # type: ignore
+        result = await tx.run(query, params)
         summary = await result.consume()
         return summary
 
-    async def safe_session(self):
+    async def safe_session(self) -> Any:
         """
         Return a context manager for an async Neo4j session that handles event loop issues.
 
@@ -388,6 +413,7 @@ Available templates for diversity preservation:
                 # Use session here
         """
         from ..event_loop_manager import safe_neo4j_session
+
         return safe_neo4j_session(self.driver, self.database)
 
 

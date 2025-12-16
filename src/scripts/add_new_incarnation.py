@@ -6,9 +6,13 @@ This script creates a new incarnation file with the necessary boilerplate code.
 Just modify the parameters below and run the script to generate a new incarnation.
 """
 
-import sys
 import argparse
+import sys
 from pathlib import Path
+
+# Add src to path
+project_root = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(project_root / "src"))
 
 # Template for a new incarnation file
 INCARNATION_TEMPLATE = '''"""
@@ -26,7 +30,7 @@ import mcp.types as types
 from pydantic import Field
 from neo4j import AsyncTransaction
 
-from .polymorphic_adapter import BaseIncarnation, IncarnationType
+from mcp_neocoder.incarnations.polymorphic_adapter import BaseIncarnation, IncarnationType
 
 logger = logging.getLogger("mcp_neocoder.incarnations.{name_lower}")
 
@@ -169,9 +173,9 @@ Each entity in the system has full tracking and audit capabilities.
 '''
 
 
-def add_incarnation_type_to_enum(incarnation_type, enum_file_path):
+def add_incarnation_type_to_enum(incarnation_type: str, enum_file_path: Path) -> bool:
     """Add the new incarnation type to the IncarnationType enum."""
-    with open(enum_file_path, 'r') as f:
+    with open(enum_file_path, "r") as f:
         content = f.read()
 
     # Find the IncarnationType class
@@ -181,12 +185,14 @@ def add_incarnation_type_to_enum(incarnation_type, enum_file_path):
         return False
 
     # Find the end of the enum definition
-    lines = content[enum_start:].split('\n')
+    lines = content[enum_start:].split("\n")
     enum_end = 0
     i = 0
     for i, line in enumerate(lines):
         if i > 0 and (not line.strip() or not line.strip().startswith("SIMULATION")):
-            enum_end = enum_start + sum(len(line_content) + 1 for line_content in lines[:i])
+            enum_end = enum_start + sum(
+                len(line_content) + 1 for line_content in lines[:i]
+            )
             break
 
     if enum_end == 0:
@@ -194,8 +200,8 @@ def add_incarnation_type_to_enum(incarnation_type, enum_file_path):
         return False
 
     # Get the last enum entry to determine the format
-    last_enum_line = lines[i-1].strip()
-    indent = ' ' * (len(last_enum_line) - len(last_enum_line.lstrip()))
+    last_enum_line = lines[i - 1].strip()
+    indent = " " * (len(last_enum_line) - len(last_enum_line.lstrip()))
 
     # Add the new enum entry
     new_content = content[:enum_end]
@@ -203,17 +209,31 @@ def add_incarnation_type_to_enum(incarnation_type, enum_file_path):
     new_content += content[enum_end:]
 
     # Write the updated file
-    with open(enum_file_path, 'w') as f:
+    with open(enum_file_path, "w") as f:
         f.write(new_content)
 
     print(f"Added {incarnation_type.upper()} to IncarnationType enum")
     return True
-def main():
-    parser = argparse.ArgumentParser(description="Create a new incarnation for the NeoCoder framework")
-    parser.add_argument("--name", required=True, help="Name of the incarnation (e.g., 'Knowledge Graph')")
-    parser.add_argument("--type", required=True, help="Type identifier (e.g., 'knowledge_graph')")
-    parser.add_argument("--description", required=True, help="Description of the incarnation")
-    parser.add_argument("--entity", default="Entity", help="Main entity type for this incarnation")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Create a new incarnation for the NeoCoder framework"
+    )
+    parser.add_argument(
+        "--name",
+        required=True,
+        help="Name of the incarnation (e.g., 'Knowledge Graph')",
+    )
+    parser.add_argument(
+        "--type", required=True, help="Type identifier (e.g., 'knowledge_graph')"
+    )
+    parser.add_argument(
+        "--description", required=True, help="Description of the incarnation"
+    )
+    parser.add_argument(
+        "--entity", default="Entity", help="Main entity type for this incarnation"
+    )
     parser.add_argument("--dir", help="Directory containing the incarnations package")
 
     args = parser.parse_args()
@@ -239,8 +259,10 @@ def main():
         inc_dir = Path(args.dir)
     else:
         # Try to find the directory relative to this script
-        script_dir = Path(__file__).parent
-        inc_dir = script_dir.parent / "src" / "mcp_neocoder" / "incarnations"
+        # Try to find the directory relative to this script
+        # This script is in src/scripts, incarnations is in src/mcp_neocoder/incarnations
+        script_dir = Path(__file__).resolve().parent
+        inc_dir = script_dir.parent / "mcp_neocoder" / "incarnations"
 
         if not inc_dir.exists():
             print(f"Error: Could not find incarnations directory at {inc_dir}")
@@ -255,7 +277,7 @@ def main():
         incarnation_type=incarnation_type.upper(),
         description=description,
         description_lowercase=description_lowercase,
-        entity_type=entity_type
+        entity_type=entity_type,
     )
 
     # Create the file
@@ -263,13 +285,15 @@ def main():
 
     # Check if file already exists
     if file_path.exists():
-        overwrite = input(f"File {file_path} already exists. Overwrite? (y/n): ").lower()
-        if overwrite != 'y':
+        overwrite = input(
+            f"File {file_path} already exists. Overwrite? (y/n): "
+        ).lower()
+        if overwrite != "y":
             print("Aborted.")
             sys.exit(0)
 
     # Write the file
-    with open(file_path, 'w') as f:
+    with open(file_path, "w") as f:
         f.write(file_content)
 
     print(f"Created new incarnation file: {file_path}")
@@ -278,7 +302,7 @@ def main():
     enum_file = inc_dir / "polymorphic_adapter.py"
     if enum_file.exists():
         # Check if the type already exists
-        with open(enum_file, 'r') as f:
+        with open(enum_file, "r") as f:
             enum_content = f.read()
 
         if incarnation_type.upper() not in enum_content:

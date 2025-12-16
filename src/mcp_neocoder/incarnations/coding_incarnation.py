@@ -7,9 +7,9 @@ including action templates, project management, workflow tracking, and best prac
 
 import logging
 
-from .base_incarnation import BaseIncarnation
 from ..action_templates import ActionTemplateMixin
 from ..event_loop_manager import safe_neo4j_session
+from .base_incarnation import BaseIncarnation
 
 logger = logging.getLogger("mcp_neocoder.incarnations.coding")
 
@@ -36,22 +36,18 @@ class CodingIncarnation(BaseIncarnation, ActionTemplateMixin):
     schema_queries = [
         # Drop any existing conflicting indexes before creating constraints
         "DROP INDEX file_path IF EXISTS",
-        
         # Project constraints
         "CREATE CONSTRAINT project_id IF NOT EXISTS FOR (p:Project) REQUIRE p.id IS UNIQUE",
-
         # Workflow execution constraints
         "CREATE CONSTRAINT workflow_id IF NOT EXISTS FOR (w:WorkflowExecution) REQUIRE w.id IS UNIQUE",
-
         # File and directory constraints (project-scoped to allow multiple projects)
         "CREATE CONSTRAINT unique_file_path IF NOT EXISTS FOR (f:File) REQUIRE (f.project_id, f.path) IS UNIQUE",
         "CREATE CONSTRAINT unique_dir_path IF NOT EXISTS FOR (d:Directory) REQUIRE (d.project_id, d.path) IS UNIQUE",
-
         # Indexes for efficient querying
         "CREATE INDEX project_name IF NOT EXISTS FOR (p:Project) ON (p.name)",
         "CREATE INDEX workflow_timestamp IF NOT EXISTS FOR (w:WorkflowExecution) ON (w.timestamp)",
         "CREATE INDEX file_name IF NOT EXISTS FOR (f:File) ON (f.name)",
-        "CREATE INDEX dir_name IF NOT EXISTS FOR (d:Directory) ON (d.name)"
+        "CREATE INDEX dir_name IF NOT EXISTS FOR (d:Directory) ON (d.name)",
     ]
 
     # Hub content - guidance for coding workflows
@@ -167,7 +163,7 @@ Welcome to the NeoCoder Coding Workflow System. This incarnation provides struct
 Remember: The key to NeoCoder is following structured workflows that ensure quality and maintainability!
 """
 
-    async def initialize_schema(self):
+    async def initialize_schema(self) -> None:
         """Initialize the Neo4j schema for the Coding incarnation."""
         try:
             # First run the parent class initialization
@@ -187,7 +183,7 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
             logger.error(f"Error initializing coding schema: {e}")
             raise
 
-    async def _create_action_templates(self):
+    async def _create_action_templates(self) -> None:
         """Create the standard action templates for coding workflows."""
         templates = [
             {
@@ -201,7 +197,7 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
 5. Run ALL relevant tests (mandatory!)
 6. Update documentation if needed
 7. Create or update tests for the bug
-8. Verify the fix resolves the issue"""
+8. Verify the fix resolves the issue""",
             },
             {
                 "keyword": "REFACTOR",
@@ -214,7 +210,7 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
 5. Implement refactoring incrementally
 6. Run tests after each change
 7. Ensure no functionality is broken
-8. Update documentation"""
+8. Update documentation""",
             },
             {
                 "keyword": "DEPLOY",
@@ -227,7 +223,7 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
 5. Execute deployment process
 6. Verify deployment success
 7. Monitor for issues
-8. Document deployment"""
+8. Document deployment""",
             },
             {
                 "keyword": "FEATURE",
@@ -240,7 +236,7 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
 5. Write tests for new functionality
 6. Run all tests
 7. Update documentation
-8. Prepare for code review"""
+8. Prepare for code review""",
             },
             {
                 "keyword": "TOOL_ADD",
@@ -253,7 +249,7 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
 5. Test tool functionality
 6. Update documentation
 7. Add to tool suggestions
-8. Create usage examples"""
+8. Create usage examples""",
             },
             {
                 "keyword": "CODE_ANALYZE",
@@ -266,8 +262,8 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
 5. Document findings
 6. Suggest improvements
 7. Create refactoring plan if needed
-8. Update project documentation"""
-            }
+8. Update project documentation""",
+            },
         ]
 
         try:
@@ -283,14 +279,16 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
                         t.created = datetime(),
                         t.updated = datetime()
                     """
-                    from typing import cast, LiteralString
-                    await session.execute_write(lambda tx: tx.run(cast(LiteralString, query), template))
+                    # Bind loop variables for closure
+                    q = query
+                    t = template
+                    await session.execute_write(lambda tx, q=q, t=t: tx.run(q, t))
                     logger.info(f"Created action template: {template['keyword']}")
         except Exception as e:
             logger.error(f"Error creating action templates: {e}")
             raise
 
-    async def _create_sample_projects(self):
+    async def _create_sample_projects(self) -> None:
         """Create sample projects if none exist."""
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
@@ -315,7 +313,7 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
         except Exception as e:
             logger.error(f"Error creating sample projects: {e}")
 
-    async def _create_best_practices(self):
+    async def _create_best_practices(self) -> None:
         """Create the best practices guide."""
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
@@ -348,9 +346,12 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
 4. Explain the "why" not just the "what"
 5. Use clear, concise language"""
 
-                await session.execute_write(lambda tx: tx.run(query, {"content": content}))
+                await session.execute_write(
+                    lambda tx: tx.run(query, {"content": content})
+                )
                 logger.info("Created best practices guide")
         except Exception as e:
             logger.error(f"Error creating best practices: {e}")
+
 
 # End of coding incarnation

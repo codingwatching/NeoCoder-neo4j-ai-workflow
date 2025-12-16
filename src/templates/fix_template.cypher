@@ -53,7 +53,9 @@ SET t.steps = '
     -   Document any areas that may need monitoring after deployment.
 '
 
-// Make sure this is the only current version for this keyword
+// Chain the invalidation logic to the MERGE logic
+WITH t
 MATCH (old:ActionTemplate {keyword: 'FIX', isCurrent: true})
-WITH old.version <> '1.2'
+WHERE old <> t AND old.version <> '1.2'
 SET old.isCurrent = false
+RETURN t
