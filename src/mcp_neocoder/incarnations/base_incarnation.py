@@ -140,8 +140,7 @@ Available templates for diversity preservation:
                 async with safe_neo4j_session(self.driver, self.database) as session:
                     # Execute each constraint/index query individually
                     for query in self.schema_queries:
-                        q = query  # Bind loop variable
-                        await session.execute_write(lambda tx, q=q: tx.run(q).consume())
+                        await session.execute_write(self._run_schema_query, query)
 
                 # Create guidance hub if needed
                 await self.ensure_hub_exists()
@@ -157,11 +156,22 @@ Available templates for diversity preservation:
             # Still create the hub
             await self.ensure_hub_exists()
 
+    @staticmethod
+    async def _run_schema_query(tx: AsyncManagedTransaction, query_str: str) -> Any:
+        """Helper to run a schema query."""
+        result = await tx.run(query_str)
+        return await result.consume()
+
     async def ensure_hub_exists(self) -> None:
         """Create the guidance hub for this incarnation if it doesn't exist."""
         from ..event_loop_manager import safe_neo4j_session
 
         hub_id = f"{self.name}_hub"
+
+        # Use the specific class content, but for base_hub we might want the generic one
+        # to avoid overwriting it with incarnation-specific text.
+        base_content = BaseIncarnation.hub_content
+        specific_content = self.hub_content
 
         # Also ensure universal base_hub exists for cross-incarnation access
         base_hub_query = """
@@ -169,7 +179,8 @@ Available templates for diversity preservation:
         ON CREATE SET hub.description = $description,
                       hub.created_at = datetime(),
                       hub.updated_at = datetime()
-        ON MATCH SET hub.updated_at = datetime()
+        ON MATCH SET hub.description = $description,
+                     hub.updated_at = datetime()
         RETURN hub
         """
 
@@ -178,7 +189,8 @@ Available templates for diversity preservation:
         ON CREATE SET hub.description = $description,
                       hub.created_at = datetime(),
                       hub.updated_at = datetime()
-        ON MATCH SET hub.updated_at = datetime()
+        ON MATCH SET hub.description = $description,
+                     hub.updated_at = datetime()
         RETURN hub
         """
 
@@ -186,14 +198,14 @@ Available templates for diversity preservation:
             async with safe_neo4j_session(self.driver, self.database) as session:
                 # Create universal base hub
                 await session.execute_write(
-                    lambda tx: tx.run(base_hub_query, {"description": self.hub_content})
+                    lambda tx: tx.run(base_hub_query, {"description": base_content})
                 )
 
                 # Create incarnation-specific hub
                 await session.execute_write(
                     lambda tx: tx.run(
                         incarnation_hub_query,
-                        {"hub_id": hub_id, "description": self.hub_content},
+                        {"hub_id": hub_id, "description": specific_content},
                     )
                 )
 
@@ -210,7 +222,9 @@ Available templates for diversity preservation:
 
         query = """
         MATCH (hub:AiGuidanceHub {id: $hub_id})
-        RETURN hub.description AS description
+        OPTIONAL MATCH (hub)-[:PROVIDES_TEMPLATE]->(t:ActionTemplate)
+        RETURN hub.description AS description,
+               collect({keyword: t.keyword, name: t.name, description: t.description}) as templates
         """
 
         try:
@@ -221,9 +235,23 @@ Available templates for diversity preservation:
                 results = json.loads(results)
 
                 if results and len(results) > 0:
-                    return [
-                        types.TextContent(type="text", text=results[0]["description"])
-                    ]
+                    data = results[0]
+                    description = data["description"]
+                    templates = data.get("templates", [])
+
+                    # Sort templates by keyword
+                    templates.sort(key=lambda x: x.get("keyword", ""))
+
+                    # Append dynamic template list to description
+                    if templates:
+                        description += "\n\n## 🧭 Available Action Templates\n"
+                        description += "The following workflows are available in this incarnation:\n\n"
+                        for tmpl in templates:
+                            if tmpl.get("keyword"):
+                                description += f"- **{tmpl.get('keyword')}**: {tmpl.get('name')} - *{tmpl.get('description')}*\n"
+                                description += f"  - Usage: `get_action_template(keyword=\"{tmpl.get('keyword')}\")`\n"
+
+                    return [types.TextContent(type="text", text=description)]
                 else:
                     # If hub doesn't exist, create it
                     await self.ensure_hub_exists()

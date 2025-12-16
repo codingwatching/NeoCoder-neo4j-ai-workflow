@@ -6,6 +6,9 @@ including action templates, project management, workflow tracking, and best prac
 """
 
 import logging
+from typing import List
+
+import mcp.types as types
 
 from ..action_templates import ActionTemplateMixin
 from ..event_loop_manager import safe_neo4j_session
@@ -52,115 +55,25 @@ class CodingIncarnation(BaseIncarnation, ActionTemplateMixin):
 
     # Hub content - guidance for coding workflows
     hub_content = """
-# NeoCoder Coding Workflow System
+# NeoCoder Coding Incarnation
 
-Welcome to the NeoCoder Coding Workflow System. This incarnation provides structured guidance for AI-assisted coding tasks through action templates and workflow tracking.
+You are now in the **Coding Incarnation**. This environment is optimized for software development, debugging, and refactoring tasks.
 
-## Core Concepts
+## 📍 Where You Are
+This Hub is your central navigation point. It is connected to specific **Action Templates** and **Projects** in the knowledge graph.
 
-1. **Action Templates**: Structured workflows for common coding tasks
-   - `FIX`: Bug fixing workflow with mandatory testing
-   - `REFACTOR`: Code refactoring with safety checks
-   - `DEPLOY`: Deployment workflow with verification steps
-   - `FEATURE`: New feature implementation
-   - `TOOL_ADD`: Adding new tools to the system
-   - `CODE_ANALYZE`: Analyzing code structure and quality
+## 🔍 How to Find Information
+*   **Action Templates**: Look at the "Available Action Templates" list below. These are structured workflows for common tasks like `FIX` or `REFACTOR`.
+    *   To see the *steps* for a workflow: `get_action_template(keyword="...")`
+*   **Projects**: To see managed repositories: `list_projects()`
+*   **History**: To see what has been done before: `get_workflow_history()`
 
-2. **Projects**: Organized code repositories with tracking
-   - README content stored in Neo4j
-   - File structure representation
-   - Change history tracking
+## 🛠️ Key Commands
+*   `get_action_template(keyword=...)` - Retrieve the specific instructions for a task.
+*   `log_workflow_execution(...)` - Record your work (Required: tests must pass!).
+*   `switch_incarnation(...)` - Change to a different mode (e.g., Research, Data Analysis).
 
-3. **Workflow Execution**: Audit trail of completed work
-   - Only logged after successful test execution
-   - Links changes to templates and projects
-   - Provides accountability and history
-
-## Getting Started
-
-1. **Get an Action Template**:
-   ```
-   get_action_template(keyword="FIX")
-   ```
-   This retrieves the step-by-step workflow for fixing bugs.
-
-2. **Follow the Template Steps**:
-   - Each template has specific steps to follow
-   - Critical steps (like testing) are mandatory
-   - Document changes as you go
-
-3. **Log Successful Completion**:
-   ```
-   log_workflow_execution(
-       project_id="my_project",
-       action_keyword="FIX",
-       summary="Fixed null pointer exception in user service",
-       files_changed=["src/services/user.py"]
-   )
-   ```
-   Only log after all tests pass!
-
-## Available Commands
-
-### Navigation & Guidance
-- `get_guidance_hub()` - Return here for orientation
-- `suggest_tool(task_description="...")` - Get tool suggestions for a task
-- `get_best_practices()` - View coding standards and guidelines
-
-### Action Templates
-- `list_action_templates()` - See all available workflows
-- `get_action_template(keyword="...")` - Get specific workflow steps
-- `add_template_feedback(keyword="...", feedback="...")` - Improve templates
-
-### Project Management
-- `list_projects()` - View all projects in the system
-- `get_project(project_id="...")` - Get project details and README
-
-### Workflow Tracking
-- `log_workflow_execution(...)` - Record completed work (tests must pass!)
-- `get_workflow_history(...)` - View past work with filters
-
-### Direct Neo4j Queries
-- `run_custom_query(query="...")` - Execute read queries
-- `write_neo4j_cypher(query="...")` - Execute write queries
-
-## Best Practices
-
-1. **Always Test Before Logging**: The system enforces quality by requiring test success before logging workflow completion.
-
-2. **Use Templates Consistently**: Templates ensure standardized approaches to common tasks.
-
-3. **Document As You Go**: Include clear summaries and file change lists in workflow logs.
-
-4. **Check History**: Use `get_workflow_history()` to learn from past work.
-
-5. **Provide Feedback**: Help improve templates with `add_template_feedback()`.
-
-## Example Workflow: Fixing a Bug
-
-1. Get the FIX template:
-   ```
-   get_action_template(keyword="FIX")
-   ```
-
-2. Follow the steps:
-   - Review the bug report
-   - Locate the issue in code
-   - Implement the fix
-   - **Run all tests** (mandatory!)
-   - Update documentation
-
-3. Log the completion:
-   ```
-   log_workflow_execution(
-       project_id="my_app",
-       action_keyword="FIX",
-       summary="Fixed date parsing error in API endpoint",
-       files_changed=["src/api/dates.py", "tests/test_dates.py"]
-   )
-   ```
-
-Remember: The key to NeoCoder is following structured workflows that ensure quality and maintainability!
+The system will now list the available workflows found in the graph:
 """
 
     async def initialize_schema(self) -> None:
@@ -182,6 +95,62 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
         except Exception as e:
             logger.error(f"Error initializing coding schema: {e}")
             raise
+
+    async def verify_package(
+        self,
+        package_name: str,
+        ecosystem: str = "pypi",
+    ) -> List[types.TextContent]:
+        """
+        Verify a software package against known repositories to prevent 'slop squatting'.
+
+        This tool simulates checking public registries (like PyPI or npm) to ensure a package
+        exists, is maintained, and is not a malicious typosquat.
+
+        Args:
+            package_name: The name of the package to verify (e.g., 'pandas', 'requests').
+            ecosystem: The package ecosystem ('pypi', 'npm'). Default is 'pypi'.
+        """
+        # Simulation logic (since we lack direct internet access in this specific environment context)
+        # In a production environment, this would call PyPI/npm APIs or use `pip-audit`.
+
+        known_safe = {
+            "pandas",
+            "numpy",
+            "requests",
+            "flask",
+            "fastapi",
+            "django",
+            "scikit-learn",
+            "matplotlib",
+            "pytest",
+            "black",
+            "mypy",
+            "ruff",
+        }
+
+        status = "UNKNOWN"
+        risk_level = "HIGH"
+        message = "Package not found in known-safe list. Verify manually."
+
+        if package_name.lower() in known_safe:
+            status = "VERIFIED"
+            risk_level = "LOW"
+            message = "Package is a known safe dependency."
+
+        result = f"""
+## Dependency Verification Report
+**Package:** `{package_name}`
+**Ecosystem:** {ecosystem}
+**Status:** {status}
+**Risk Level:** {risk_level}
+
+{message}
+
+> [!WARNING]
+> This is a simulated check. In a live environment, use `pip-audit` or query PyPI directly to prevent supply chain attacks.
+"""
+        return [types.TextContent(type="text", text=result)]
 
     async def _create_action_templates(self) -> None:
         """Create the standard action templates for coding workflows."""
@@ -264,6 +233,20 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
 7. Create refactoring plan if needed
 8. Update project documentation""",
             },
+            {
+                "keyword": "SHRED",
+                "name": "Design Doc Shredder Review",
+                "description": "Adversarial design review using the Principal Engineer Checklist",
+                "steps": """1. **Ambiguity Scan**: Highlight vague verbs (e.g., 'manage', 'process'). Demand mechanical definitions.
+2. **Dependency Audit**: Extract every library name. Use `verify_package` to confirm existence. Reject non-verified packages.
+3. **Failure Analysis (What If?)**:
+   - What if invalid input (1GB file)?
+   - What if network partition?
+   - What if database locks?
+4. **Observability Check**: Ensure logging (JSON), metrics (latency/errors), and health checks are defined.
+5. **Security & Data**: Verify authentication protocols and data encryption.
+6. **Go/No-Go Decision**: Only approve if all 'Traps' are mitigated.""",
+            },
         ]
 
         try:
@@ -278,6 +261,10 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
                         t.version = 1,
                         t.created = datetime(),
                         t.updated = datetime()
+
+                    WITH t
+                    MERGE (hub:AiGuidanceHub {id: 'coding_hub'})
+                    MERGE (hub)-[:PROVIDES_TEMPLATE]->(t)
                     """
                     # Bind loop variables for closure
                     q = query
@@ -323,28 +310,33 @@ Remember: The key to NeoCoder is following structured workflows that ensure qual
                     bp.updated = datetime()
                 """
 
-                content = """# NeoCoder Best Practices
+                content = """# NeoCoder Principal Engineer Checklist (The Shredder)
 
-## Code Quality
-1. Always write tests before marking work as complete
-2. Follow consistent naming conventions
-3. Document complex logic
-4. Keep functions focused and small
-5. Handle errors gracefully
+## 1. Ambiguity & Scope
+*   **The "How" Test**: Does every verb (process, handle) have a mechanism?
+*   **The Boundary Test**: What is *not* being built?
+*   **The NFR Test**: Are throughput/latency defined with numbers?
 
-## Workflow Practices
-1. Use action templates for consistency
-2. Log all significant changes
-3. Include clear commit messages
-4. Review code before deployment
-5. Monitor after deployment
+## 2. Supply Chain Security
+*   **The Existence Test**: Do all packages exist? (Use `verify_package`).
+*   **The Freshness Test**: Are packages maintained?
+*   **The Weight Test**: Are we using a sledgehammer (Django) for a nut (script)?
 
-## Documentation
-1. Keep README files updated
-2. Document API changes
-3. Include examples in documentation
-4. Explain the "why" not just the "what"
-5. Use clear, concise language"""
+## 3. Failure Modes (What If?)
+*   **The Resource Test**: What happens if a 10GB file is uploaded? (DoS).
+*   **The Network Test**: What happens if the DB connection times out?
+*   **The State Test**: What happens if the process crashes mid-transaction?
+
+## 4. Observability
+*   **The Log Test**: Are logs structured (JSON)? No `print()` allowed.
+*   **The Metric Test**: Are Success Rate and Latency measured?
+*   **The Probe Test**: Is there a `/health` endpoint?
+
+## 5. Standard Code Quality
+*   Always write tests before marking work as complete.
+*   Keep functions focused and small.
+*   Document complex logic.
+"""
 
                 await session.execute_write(
                     lambda tx: tx.run(query, {"content": content})

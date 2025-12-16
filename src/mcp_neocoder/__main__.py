@@ -82,7 +82,18 @@ def main() -> None:
         server_main()
     elif args.command == "init":
         logger.info("Initializing Neo4j database")
-        init_db_main()
+        import sys
+
+        # Pass remaining arguments to init_db (excluding script name and 'init' command)
+        # Find 'init' in argv to be safe about where to slice
+        try:
+            init_index = sys.argv.index("init")
+            init_args = sys.argv[init_index + 1 :]
+        except ValueError:
+            # Fallback if 'init' not found (unlikely if parser matched it)
+            init_args = []
+
+        init_db_main(init_args)
 
     else:
         # Default to server if no command provided

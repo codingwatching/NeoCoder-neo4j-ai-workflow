@@ -109,6 +109,9 @@ class Neo4jWorkflowServer(
         # Initialize the base attributes
         self.incarnation_registry: Dict[str, Any] = {}
         self.current_incarnation: Optional[Any] = None
+        self.initialization_error: Optional[str] = None
+
+        # Add initialization event for synchronization
 
         # Add initialization event for synchronization
         self.initialized_event: asyncio.Event = asyncio.Event()
@@ -174,6 +177,9 @@ class Neo4jWorkflowServer(
                     f"- **Incarnations Loaded**: {len(self.incarnation_registry)}\n"
                 )
 
+            if hasattr(self, "initialization_error") and self.initialization_error:
+                response += f"\n## Errors\n**Initialization Error**: {self.initialization_error}\n"
+
             return [types.TextContent(type="text", text=response)]
 
         except Exception as e:
@@ -235,9 +241,8 @@ class Neo4jWorkflowServer(
                 task = asyncio.create_task(self._register_basic_handlers())
                 track_background_task(task)
 
-                # Start full initialization
-                init_task = asyncio.create_task(self._initialize_async())
-                track_background_task(init_task)
+                # Recursive initialization removed to prevent event loop issues
+                # Initialization should be triggered by run() or lazy loading
 
         except Exception as e:
             logger.error(f"Failed to initialize Neo4j driver: {e}")
@@ -275,6 +280,7 @@ class Neo4jWorkflowServer(
         except Exception as e:
             logger.error(f"Error during initialization: {str(e)}")
             logger.debug(f"Initialization error details: {traceback.format_exc()}")
+            self.initialization_error = str(e)
             logger.info("Server will continue with limited functionality")
 
     # _initialize method removed since we now use async initialization
@@ -797,6 +803,14 @@ Please wait a moment for full initialization to complete or check connection sta
     async def list_incarnations(self) -> List[types.TextContent]:
         """List all available incarnations."""
         try:
+            # Ensure server is fully initialized (lazy loading)
+            if (
+                hasattr(self, "initialized_event")
+                and not self.initialized_event.is_set()
+            ):
+                logger.info("Triggering lazy initialization from list_incarnations")
+                await self._initialize_async()
+
             incarnations = []
             for inc_type, inc_class in self.incarnation_registry.items():
                 incarnations.append(
@@ -838,12 +852,19 @@ Please wait a moment for full initialization to complete or check connection sta
     async def switch_incarnation(
         self,
         incarnation_type: str = Field(
-            ...,
-            description="Type of incarnation to switch to (coding, research, decision, data_analysis, knowledge_graph)",
+            ..., description="Type of incarnation to switch to"
         ),
     ) -> List[types.TextContent]:
         """Switch the server to a different incarnation."""
         try:
+            # Ensure server is fully initialized (lazy loading)
+            if (
+                hasattr(self, "initialized_event")
+                and not self.initialized_event.is_set()
+            ):
+                logger.info("Triggering lazy initialization from switch_incarnation")
+                await self._initialize_async()
+
             # Check if the incarnation type exists in the registry
             available_types = list(self.incarnation_registry.keys())
 
@@ -1296,11 +1317,41 @@ Please wait a moment for full initialization to complete or check connection sta
         Returns:
             MCP response containing the hub content
         """
-        # Import the safe session manager
-        from .event_loop_manager import safe_neo4j_session
+        try:
+            # Ensure server is fully initialized (lazy loading)
+            if (
+                hasattr(self, "initialized_event")
+                and not self.initialized_event.is_set()
+            ):
+                logger.info("Triggering lazy initialization from get_guidance_hub")
+                await self._initialize_async()
 
-        # Fallback description in case of any database issues
-        fallback_hub_description = """
+            # 1. Try to get incarnation-specific hub if an incarnation is active
+            if hasattr(self, "current_incarnation") and self.current_incarnation:
+                try:
+                    logger.info(
+                        f"Getting guidance hub from active incarnation: {self.current_incarnation.name}"
+                    )
+                    result = await self.current_incarnation.get_guidance_hub()
+                    if result and isinstance(result, list) and len(result) > 0:
+                        return list(result)
+                    logger.warning(
+                        "Empty result from incarnation hub, falling back to main hub"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Error getting hub from incarnation {self.current_incarnation.name}: {str(e)}"
+                    )
+                    logger.info("Falling back to main hub")
+
+            # 2. Get the main hub with event loop safe session handling
+            logger.info("Getting main guidance hub")
+
+            # Import the safe session manager
+            from .event_loop_manager import safe_neo4j_session
+
+            # Fallback description in case of any database issues
+            fallback_hub_description = """
 # NeoCoder Neo4j-Guided AI Workflow
 
 Welcome! This system uses a Neo4j knowledge graph to guide AI coding assistance and other workflows.
@@ -1314,74 +1365,63 @@ Welcome! This system uses a Neo4j knowledge graph to guide AI coding assistance 
 This is the default guidance hub. Use the commands above to explore the system's capabilities.
 """
 
-        # 1. Try to get incarnation-specific hub if an incarnation is active
-        if hasattr(self, "current_incarnation") and self.current_incarnation:
             try:
-                logger.info(
-                    f"Getting guidance hub from active incarnation: {self.current_incarnation.name}"
-                )
-                result = await self.current_incarnation.get_guidance_hub()
-                if result and isinstance(result, list) and len(result) > 0:
-                    return list(result)
-                logger.warning(
-                    "Empty result from incarnation hub, falling back to main hub"
-                )
-            except Exception as e:
-                logger.error(
-                    f"Error getting hub from incarnation {self.current_incarnation.name}: {str(e)}"
-                )
-                logger.info("Falling back to main hub")
+                # Use the safe session manager to avoid event loop issues
+                async with safe_neo4j_session(
+                    self.driver, self.database or "neo4j"
+                ) as session:
+                    query = """
+                    MATCH (hub:AiGuidanceHub {id: 'main_hub'})
+                    RETURN hub.description AS description
+                    """
 
-        # 2. Get the main hub with event loop safe session handling
-        logger.info("Getting main guidance hub")
+                    # Use a direct transaction to avoid scope issues
+                    async def read_hub_description(tx: AsyncTransaction) -> Any:
+                        result = await tx.run(query)
+                        values = await result.values()
+                        return values
 
-        try:
-            # Use the safe session manager to avoid event loop issues
-            async with safe_neo4j_session(
-                self.driver, self.database or "neo4j"
-            ) as session:
-                query = """
-                MATCH (hub:AiGuidanceHub {id: 'main_hub'})
-                RETURN hub.description AS description
-                """
+                    values = await session.execute_read(read_hub_description)
 
-                # Use a direct transaction to avoid scope issues
-                async def read_hub_description(tx: AsyncTransaction) -> Any:
-                    result = await tx.run(query)
-                    values = await result.values()
-                    return values
+                    if values and len(values) > 0 and values[0][0]:
+                        # Hub exists, get its content
+                        hub_content = values[0][0]
 
-                values = await session.execute_read(read_hub_description)
+                        # Enhance with incarnation information
+                        try:
+                            hub_content = await self._enhance_hub_with_incarnation_info(
+                                hub_content
+                            )
+                        except Exception as e:
+                            logger.error(f"Error enhancing hub content: {str(e)}")
+                            # Continue with unenhanced content
 
-                if values and len(values) > 0 and values[0][0]:
-                    # Hub exists, get its content
-                    hub_content = values[0][0]
-
-                    # Enhance with incarnation information
-                    try:
-                        hub_content = await self._enhance_hub_with_incarnation_info(
-                            hub_content
+                        return [types.TextContent(type="text", text=hub_content)]
+                    else:
+                        # Hub doesn't exist or no description, create it
+                        logger.info(
+                            "Main hub not found or has no description, creating default hub"
                         )
-                    except Exception as e:
-                        logger.error(f"Error enhancing hub content: {str(e)}")
-                        # Continue with unenhanced content
+                        return await self._create_default_hub()
 
-                    return [types.TextContent(type="text", text=hub_content)]
-                else:
-                    # Hub doesn't exist or no description, create it
-                    logger.info(
-                        "Main hub not found or has no description, creating default hub"
-                    )
-                    return await self._create_default_hub()
+            except Exception as e:
+                # Handle database errors gracefully
+                logger.error(f"Error getting main guidance hub: {str(e)}")
+                logger.error(f"Error details: {traceback.format_exc()}")
+
+                # Return fallback content instead of failing
+                logger.info("Returning fallback guidance hub due to database error")
+                return [types.TextContent(type="text", text=fallback_hub_description)]
 
         except Exception as e:
-            # Handle database errors gracefully
-            logger.error(f"Error getting main guidance hub: {str(e)}")
-            logger.error(f"Error details: {traceback.format_exc()}")
-
-            # Return fallback content instead of failing
-            logger.info("Returning fallback guidance hub due to database error")
-            return [types.TextContent(type="text", text=fallback_hub_description)]
+            # Catch-all for top level errors (including initialization errors)
+            logger.error(f"Critical error in get_guidance_hub: {str(e)}")
+            return [
+                types.TextContent(
+                    type="text",
+                    text="Error retrieving guidance hub. Please check server logs.",
+                )
+            ]
 
     async def _enhance_hub_with_incarnation_info(self, hub_content: str) -> str:
         """Enhance hub content with up-to-date incarnation information.

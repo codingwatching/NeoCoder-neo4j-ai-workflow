@@ -584,7 +584,7 @@ async def init_db(
     return success
 
 
-def main() -> None:
+def main(argv: Optional[List[str]] = None) -> None:
     """Main entry point for the database initialization."""
     import argparse
     import asyncio
@@ -596,7 +596,7 @@ def main() -> None:
     parser.add_argument(
         "--template-dir", help="Directory containing .cypher templates to load"
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Robust event loop handling for asyncio (fixes 'Future attached to a different loop' errors)
     try:
