@@ -180,19 +180,23 @@ Neo4j connection parameters:
       "command": "uv",
       "args": [
         "--directory",
-        "/path/to/your/NeoCoder-neo4j-ai-workflow/src/mcp_neocoder",
+        "/your-path-to/NeoCoder-neo4j-ai-workflow",
         "run",
         "mcp_neocoder"
       ],
       "env": {
         "NEO4J_URL": "bolt://localhost:7687",
         "NEO4J_USERNAME": "neo4j",
-        "NEO4J_PASSWORD": "<YOUR_NEO4J_PASSWORD>",
-        "NEO4J_DATABASE": "neo4j"
+        "NEO4J_PASSWORD": "your-neo4j-password-here",
+        "NEO4J_DATABASE": "neo4j",
+        "LOG_LEVEL": "INFO",
+        "MCP_TRANSPORT": "stdio",
+        "PYTHONUNBUFFERED": "1"
       }
     }
   }
 }
+
 ```
 
    **Important**: The password in this configuration must match your
