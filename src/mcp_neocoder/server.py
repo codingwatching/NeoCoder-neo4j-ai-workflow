@@ -18,7 +18,7 @@ import logging
 import os
 import sys
 import traceback
-from typing import Annotated, Any, Awaitable, Dict, List, Optional, TypeVar
+from typing import Annotated, Any, Awaitable, Dict, List, Optional, TypeVar, Union
 
 import mcp.types as types
 import neo4j
@@ -213,7 +213,7 @@ class Neo4jWorkflowServer(
             self.driver = AsyncGraphDatabase.driver(
                 db_url,
                 auth=(username, password),
-                max_connection_pool_size=driver_config["max_connection_pool_size"],
+                max_connection_pool_size=int(driver_config["max_connection_pool_size"]),
                 max_transaction_retry_time=driver_config["max_transaction_retry_time"],
                 connection_acquisition_timeout=driver_config[
                     "connection_acquisition_timeout"
@@ -394,7 +394,10 @@ class Neo4jWorkflowServer(
             return False
 
     async def _execute_boolean_query(
-        self, tx: AsyncTransaction, query: str, params: dict
+        self,
+        tx: Union[AsyncTransaction, AsyncManagedTransaction],
+        query: str,
+        params: dict,
     ) -> bool:
         """Execute a query that returns a boolean result.
 
@@ -567,6 +570,10 @@ class Neo4jWorkflowServer(
         logger.info(
             f"Registering {len(global_registry.incarnations)} incarnations with server"
         )
+
+        if not self.driver:
+            logger.warning("Driver not initialized, skipping incarnation registration")
+            return
 
         for name, inc_class in list(global_registry.incarnations.items()):
             try:
@@ -1739,7 +1746,7 @@ This is the default guidance hub. Use the commands above to explore the system's
     async def _write(
         self, tx: AsyncManagedTransaction, query: str, params: dict
     ) -> Any:
-        """Execute a write query and return result summary.
+        """Execute a write query and return serialized JSON result.
 
         Args:
             tx: Neo4j transaction
@@ -1747,11 +1754,36 @@ This is the default guidance hub. Use the commands above to explore the system's
             params: Query parameters
 
         Returns:
-            Neo4j result summary
+            JSON string representing the query results or summary counters
         """
         try:
             result = await tx.run(query, params or {})
-            return await result.consume()
+
+            # Check if we should return records or summary
+            # We first try to peek at records. If the query returns records, we consume them.
+            # However, for pure write queries, we just want the summary.
+            # The safest approach for mixed usage is to try to get records.
+            # But result.consume() discards records.
+
+            # Use to_eager_result to get both summary and records safely
+            eager_result = await result.to_eager_result()
+
+            if eager_result.records:
+                # If there are records, return them as JSON
+                return json.dumps([r.data() for r in eager_result.records], default=str)
+            else:
+                # If no records, return the summary counters as JSON
+                summary = eager_result.summary
+                counters = {
+                    "nodes_created": summary.counters.nodes_created,
+                    "relationships_created": summary.counters.relationships_created,
+                    "properties_set": summary.counters.properties_set,
+                    "nodes_deleted": summary.counters.nodes_deleted,
+                    "relationships_deleted": summary.counters.relationships_deleted,
+                    "contains_updates": summary.counters.contains_updates,
+                }
+                return json.dumps(counters)
+
         except Exception as e:
             logger.error(f"Error executing write query: {str(e)}")
             logger.debug(f"Failed query: {query}")
@@ -1979,21 +2011,30 @@ This is the default guidance hub. Use the commands above to explore the system's
                 self.driver, self.database or "neo4j"
             ) as session:
                 # Fixed: Use lambda directly without wrapping in Callable
-                result = await session.execute_write(
+                result_json = await session.execute_write(
                     lambda tx: self._write(tx, query, params)
                 )
 
+                # Parse the result
+                data = json.loads(result_json)
+
                 # Format a summary of what happened
                 response = "Query executed successfully.\n\n"
-                response += f"Nodes created: {result.counters.nodes_created}\n"
-                response += (
-                    f"Relationships created: {result.counters.relationships_created}\n"
-                )
-                response += f"Properties set: {result.counters.properties_set}\n"
-                response += f"Nodes deleted: {result.counters.nodes_deleted}\n"
-                response += (
-                    f"Relationships deleted: {result.counters.relationships_deleted}\n"
-                )
+
+                if isinstance(data, dict) and "nodes_created" in data:
+                    # It's a summary response (pure write)
+                    response += f"Nodes created: {data.get('nodes_created', 0)}\n"
+                    response += f"Relationships created: {data.get('relationships_created', 0)}\n"
+                    response += f"Properties set: {data.get('properties_set', 0)}\n"
+                    response += f"Nodes deleted: {data.get('nodes_deleted', 0)}\n"
+                    response += f"Relationships deleted: {data.get('relationships_deleted', 0)}\n"
+                elif isinstance(data, list):
+                    # It returned records (write with RETURN)
+                    response += f"Returned {len(data)} records.\n"
+                    if len(data) > 0:
+                        response += f"First record: {data[0]}\n"
+                else:
+                    response += "Operation completed.\n"
 
                 return [types.TextContent(type="text", text=response)]
         except Exception as e:

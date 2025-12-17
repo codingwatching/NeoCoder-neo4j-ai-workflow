@@ -359,9 +359,26 @@ Remember: This system uses **actual Lotka-Volterra mathematical dynamics**, not 
             async with safe_neo4j_session(self.driver, self.database) as session:
                 # Execute each constraint/index query individually
                 # Execute each constraint/index query individually
+                # Execute each constraint/index query individually
                 for query in schema_queries:
-                    # Fix loop variable binding by default argument
-                    await session.execute_write(lambda tx, q=query: tx.run(q))
+                    try:
+                        # Fix loop variable binding by default argument
+                        await session.execute_write(lambda tx, q=query: tx.run(q))
+                    except Exception as e:
+                        # Check for index/constraint already exists error
+                        error_msg = str(e)
+                        if (
+                            "already exists" in error_msg
+                            or "Neo.ClientError.Schema.IndexAlreadyExists" in error_msg
+                            or "Neo.ClientError.Schema.ConstraintAlreadyExists"
+                            in error_msg
+                        ):
+                            logger.info(
+                                f"Schema artifact already exists, skipping: {query[:50]}..."
+                            )
+                        else:
+                            # Re-raise other errors
+                            raise
 
                 # Create base guidance hub for this incarnation if it doesn't exist
                 await self.ensure_guidance_hub_exists()
@@ -369,7 +386,9 @@ Remember: This system uses **actual Lotka-Volterra mathematical dynamics**, not 
             logger.info("Knowledge Graph incarnation schema initialized")
         except Exception as e:
             logger.error(f"Error initializing knowledge_graph schema: {e}")
-            raise
+            # Don't re-raise here to allow the incarnation to load even if schema init has issues
+            # This is safer for production resiliency
+            logger.warning("Continuing despite schema initialization error")
 
     async def ensure_guidance_hub_exists(self) -> None:
         """Create the guidance hub for this incarnation if it doesn't exist."""

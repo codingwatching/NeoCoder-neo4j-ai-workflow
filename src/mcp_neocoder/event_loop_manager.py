@@ -8,7 +8,7 @@ Simplified to rely on standard asyncio and Neo4j driver capabilities.
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 from neo4j import AsyncDriver
 
@@ -17,7 +17,7 @@ logger = logging.getLogger("mcp_neocoder")
 
 @asynccontextmanager
 async def safe_neo4j_session(
-    driver: AsyncDriver, database: str
+    driver: Optional[AsyncDriver], database: str
 ) -> AsyncGenerator[Any, None]:
     """
     Create a Neo4j session ensuring proper tracking.
@@ -27,6 +27,9 @@ async def safe_neo4j_session(
     """
     # Import tracking functions
     from .process_manager import track_session, untrack_session
+
+    if driver is None:
+        raise RuntimeError("Neo4j driver is not initialized")
 
     session = None
     try:
