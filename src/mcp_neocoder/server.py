@@ -22,7 +22,7 @@ from typing import Annotated, Any, Awaitable, Dict, List, Optional, TypeVar, Uni
 
 import mcp.types as types
 import neo4j
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from neo4j import (
     AsyncDriver,
     AsyncGraphDatabase,
@@ -861,6 +861,7 @@ Please wait a moment for full initialization to complete or check connection sta
         incarnation_type: str = Field(
             ..., description="Type of incarnation to switch to"
         ),
+        ctx: Context = None,  # Injected by FastMCP
     ) -> List[types.TextContent]:
         """Switch the server to a different incarnation."""
         try:
@@ -886,6 +887,20 @@ Please wait a moment for full initialization to complete or check connection sta
 
             # Set the incarnation using the string directly
             await self.set_incarnation(incarnation_type)
+
+            # Notify the client that the tool list has changed
+            # This allows the AI to re-fetch and see the new incarnation's tools
+            if ctx and hasattr(ctx, "session") and ctx.session:
+                try:
+                    await ctx.session.send_tool_list_changed()
+                    logger.info(
+                        f"Sent tool list changed notification after switching to '{incarnation_type}'"
+                    )
+                except Exception as notify_err:
+                    logger.warning(
+                        f"Failed to send tool list changed notification: {notify_err}"
+                    )
+
             return [
                 types.TextContent(
                     type="text",
