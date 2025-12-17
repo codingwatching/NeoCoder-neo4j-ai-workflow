@@ -270,9 +270,9 @@ class Neo4jWorkflowServer(
             self._load_incarnations()
             logger.info("Incarnations loaded")
 
-            # 5. Register initial incarnation tools (async)
-            await self._register_initial_incarnation()
-            logger.info("Registered initial incarnation tools")
+            # 5. Register all incarnation tools globally (async)
+            await self._register_all_incarnations()
+            logger.info("Registered all incarnation tools globally")
 
             # Set the initialized event to signal completion
             self.initialized_event.set()
@@ -714,12 +714,12 @@ Please wait a moment for full initialization to complete or check connection sta
             logger.error(f"Failed to register basic handlers: {e}")
             logger.info("Server will continue but may have reduced functionality")
 
-    async def _register_initial_incarnation(self) -> int:
-        """Register the initial incarnation and its tools."""
-        logger.info("Setting up initial incarnation...")
+    async def _register_all_incarnations(self) -> int:
+        """Register all discovered incarnations and their tools globally."""
+        logger.info("Registering all incarnations globally...")
 
         if not self.incarnation_registry:
-            logger.warning("No incarnations registered, skipping initial setup")
+            logger.warning("No incarnations registered to load.")
             return 0
 
         # Import the registries
@@ -734,47 +734,75 @@ Please wait a moment for full initialization to complete or check connection sta
             global_registry.discover()
 
         # Clear any previously registered MCP tools to start fresh
-        # But preserve core tools - check if they are in _mcp_registered_tools?
-        # tool_registry._mcp_registered_tools.clear() # This might be too aggressive if core tools are there.
-        # Actually _register_core_tools calls tool_registry.register_tools_with_server(self) which adds to _mcp_registered_tools.
-        # If we clear it, we must re-register core tools.
-
         tool_registry._mcp_registered_tools.clear()
 
         # First register core tools with MCP
         logger.info("Registering core tools with MCP server...")
-        core_count = tool_registry.register_tools_with_server(self)
-        logger.info(f"Registered {core_count} core tools with MCP server")
+        total_tools = tool_registry.register_tools_with_server(self)
+        logger.info(f"Registered {total_tools} core tools with MCP server")
 
-        # Determine initial incarnation
-        # Default to 'coding' or the first available
+        # Iterate and register all incarnations
+        for name_key, inc_class in self.incarnation_registry.items():
+            try:
+                # Handle name string
+                inc_name = (
+                    name_key.value
+                    if hasattr(name_key, "value") and not isinstance(name_key, str)
+                    else str(name_key)
+                )
+
+                logger.info(f"Initializing incarnation: {inc_name}")
+
+                # Instantiate
+                # Ensure database is never None
+                instance = inc_class(self.driver, self.database or "neo4j")
+
+                # Init Schema (idempotent)
+                try:
+                    await instance.initialize_schema()
+                except Exception as schema_err:
+                    logger.warning(
+                        f"Schema initialization warning for {inc_name}: {schema_err}"
+                    )
+
+                # Register Tools
+                # Note: register_tools is async in BaseIncarnation
+                count = await instance.register_tools(self)
+                total_tools += count
+                logger.info(f"Registered {count} tools for {inc_name}")
+
+            except Exception as e:
+                logger.error(f"Failed to register incarnation {name_key}: {e}")
+                logger.debug(traceback.format_exc())
+
+        # Set initial context (Guidance Hub) to 'coding' or first available
         initial_type = "coding"
-        available_types = list(self.incarnation_registry.keys())
-
+        available_types = []
         name_map = {}
-        for k in available_types:
+
+        for k in self.incarnation_registry.keys():
             key_str = (
                 k.value if hasattr(k, "value") and not isinstance(k, str) else str(k)
             )
+            available_types.append(key_str)
             name_map[key_str] = k
 
-        if initial_type not in name_map:
+        if initial_type not in available_types:
             if available_types:
-                initial_type = list(name_map.keys())[0]
+                initial_type = available_types[0]
             else:
-                logger.error("No incarnations available to select.")
-                return core_count
+                logger.error("No incarnations available to select as initial context.")
+                return total_tools
 
-        logger.info(f"Selected initial incarnation: {initial_type}")
-
+        logger.info(f"Setting initial active context to: {initial_type}")
         try:
+            # We call set_incarnation to set the current pointer (Guidance Hub context)
             await self.set_incarnation(initial_type)
-            # The tool count is not returned by set_incarnation, but tools are registered.
-            return core_count  # + incarnation tools (unknown count)
         except Exception as e:
-            logger.error(f"Failed to set initial incarnation {initial_type}: {e}")
-            logger.error(traceback.format_exc())
-            return core_count
+            logger.error(f"Failed to set initial context {initial_type}: {e}")
+
+        logger.info(f"Global registration complete. Total tools: {total_tools}")
+        return total_tools
 
     async def _register_all_incarnation_tools(self) -> int:
         """Register tools from all loaded incarnations.
@@ -861,7 +889,7 @@ Please wait a moment for full initialization to complete or check connection sta
         incarnation_type: str = Field(
             ..., description="Type of incarnation to switch to"
         ),
-        ctx: Context = None,  # Injected by FastMCP
+        ctx: Optional[Context] = None,  # Injected by FastMCP
     ) -> List[types.TextContent]:
         """Switch the server to a different incarnation."""
         try:

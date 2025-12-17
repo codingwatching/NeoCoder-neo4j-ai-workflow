@@ -12,6 +12,7 @@ from typing import Annotated, Dict, List
 
 import mcp.types as types
 import numpy as np
+from neo4j import AsyncTransaction, Record
 from pydantic import Field
 
 from ..event_loop_manager import safe_neo4j_session
@@ -265,8 +266,8 @@ Welcome to the **Ecological Architect**. This environment uses biological ecosys
 
         async with safe_neo4j_session(self.driver, self.database) as session:
             # Fetch current state
-            data = await session.execute_read(
-                lambda tx: tx.run(
+            async def _get_state(tx: AsyncTransaction) -> Record | None:
+                result = await tx.run(
                     """
                 MATCH (l:ConstraintLedger {id: $ledger_id})
                 OPTIONAL MATCH (l)-[:TRACKS]->(c:Constraint)
@@ -275,8 +276,9 @@ Welcome to the **Ecological Architect**. This environment uses biological ecosys
             """,
                     {"ledger_id": ledger_id},
                 )
-            )
-            record = await data.single()
+                return await result.single()
+
+            record = await session.execute_read(_get_state)
 
             constraints = [c for c in record["constraints"] if c]
             shredders = [s for s in record["shredders"] if s]
@@ -389,8 +391,9 @@ Simulation ran for {steps} steps.
         ledger_id = f"ledger_{project_id}"
 
         async with safe_neo4j_session(self.driver, self.database) as session:
-            result = await session.execute_write(
-                lambda tx: tx.run(
+
+            async def _finalize(tx: AsyncTransaction) -> Record | None:
+                res = await tx.run(
                     """
                 MATCH (l:ConstraintLedger {id: $ledger_id})
                 SET l.status = 'ACTIVE', l.finalized_at = datetime()
@@ -400,8 +403,9 @@ Simulation ran for {steps} steps.
             """,
                     {"ledger_id": ledger_id},
                 )
-            )
-            record = await result.single()
+                return await res.single()
+
+            record = await session.execute_write(_finalize)
             count = record["survivors"] if record else 0
 
         return [

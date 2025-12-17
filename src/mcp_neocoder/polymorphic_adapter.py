@@ -102,20 +102,9 @@ class PolymorphicAdapterMixin:
             incarnation_class = self.incarnation_registry[incarnation_type]
             incarnation_instance = incarnation_class(driver, database)
 
-        # Unregister previous incarnation tools if switching
-        if self.current_incarnation:
-            try:
-                prev_name = getattr(self.current_incarnation, "name", None)
-                if prev_name:
-                    from .tool_registry import registry as tool_registry
-
-                    logger.info(
-                        f"Unregistering tools for previous incarnation: {prev_name}"
-                    )
-                    tool_registry.unregister_incarnation_tools(self, prev_name)
-            except Exception as e:
-                logger.error(f"Error unregistering previous incarnation tools: {e}")
-
+        # Update current incarnation pointer
+        # Note: We do NOT unregister/register tools here anymore.
+        # Tools are now globally registered at startup.
         self.current_incarnation = incarnation_instance
 
         # Initialize schema with async context error recovery
@@ -144,36 +133,7 @@ class PolymorphicAdapterMixin:
             else:
                 raise
 
-        # Register incarnation-specific tools with async error recovery
-        logger.info(f"Registering tools for incarnation: {incarnation_type}")
-        try:
-            # We explicitly pass 'self' (the server) to register_tools
-            # This delegates to tool_registry.register_incarnation_tools(incarnation, server)
-            tool_count = await self.current_incarnation.register_tools(self)
-            logger.info(f"Registered {tool_count} tools for {incarnation_type}")
-        except RuntimeError as e:
-            if "different loop" in str(e).lower():
-                logger.warning(
-                    "Tool registration async loop conflict, attempting recovery"
-                )
-                try:
-                    tool_count = await asyncio.create_task(
-                        self.current_incarnation.register_tools(self)
-                    )
-                    logger.info(
-                        f"Registered {tool_count} tools for {incarnation_type} (recovered)"
-                    )
-                except Exception as recovery_err:
-                    logger.error(
-                        f"Failed to recover from tool registration conflict: {recovery_err}"
-                    )
-                    raise RuntimeError(
-                        f"Tool registration failed: {recovery_err}"
-                    ) from recovery_err
-            else:
-                raise
-
-        logger.info(f"Successfully switched to incarnation: {incarnation_type}")
+        logger.info(f"Successfully switched context to incarnation: {incarnation_type}")
         return self.current_incarnation
 
     async def get_current_incarnation_type(self) -> Optional[str]:
