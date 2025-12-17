@@ -143,5 +143,16 @@ module = [
   "sentence_transformers.*",
   "numpy.*",
   "scipy.*",
+  "sklearn.*",
+  "matplotlib.*",
+  "plotly.*",
+  "plotly",
+  "pandas.*",
+  "seaborn.*",
+  "dateutil.*",
 ]
 ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
+
+[dependency-groups]
+dev = []

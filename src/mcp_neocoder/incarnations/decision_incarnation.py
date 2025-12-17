@@ -8,14 +8,14 @@ providing tools for tracking decisions, alternatives, metrics, and evidence.
 import json
 import logging
 import uuid
-from typing import Dict, Any, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
 
 import mcp.types as types
+from neo4j import AsyncDriver, AsyncManagedTransaction, AsyncTransaction
 from pydantic import Field
-from neo4j import AsyncDriver, AsyncTransaction, AsyncManagedTransaction
 
-from .base_incarnation import BaseIncarnation
 from ..event_loop_manager import safe_neo4j_session
+from .base_incarnation import BaseIncarnation
 
 logger = logging.getLogger("mcp_neocoder.decision_incarnation")
 
@@ -39,7 +39,7 @@ class DecisionIncarnation(BaseIncarnation):
         "get_decision",
         "add_alternative",
         "add_metric",
-        "add_evidence"
+        "add_evidence",
     ]
 
     def __init__(self, driver: AsyncDriver, database: str = "neo4j"):
@@ -51,19 +51,29 @@ class DecisionIncarnation(BaseIncarnation):
 
     from typing import LiteralString
 
-    async def _read_query(self, tx: "AsyncTransaction | AsyncManagedTransaction", query: "LiteralString", params: dict) -> str:
+    async def _read_query(
+        self,
+        tx: "AsyncTransaction | AsyncManagedTransaction",
+        query: "LiteralString",
+        params: dict,
+    ) -> str:
         """Execute a read query and return results as JSON string."""
         raw_results = await tx.run(query, params)
         eager_results = await raw_results.to_eager_result()
         return json.dumps([r.data() for r in eager_results.records], default=str)
 
-    async def _write(self, tx, query: "LiteralString", params: dict):
+    async def _write(
+        self,
+        tx: "AsyncTransaction | AsyncManagedTransaction",
+        query: "LiteralString",
+        params: dict,
+    ) -> Any:
         """Execute a write query and return results as JSON string."""
         result = await tx.run(query, params or {})
         summary = await result.consume()
         return summary
 
-    async def initialize_schema(self):
+    async def initialize_schema(self) -> None:
         """Initialize the Neo4j schema for decision support system."""
         # Define constraints and indexes for decision schema
         schema_query = """
@@ -90,7 +100,7 @@ class DecisionIncarnation(BaseIncarnation):
             logger.error(f"Error initializing decision schema: {e}")
             raise
 
-    async def ensure_decision_hub_exists(self):
+    async def ensure_decision_hub_exists(self) -> None:
         """Create the decision guidance hub if it doesn't exist."""
         query = """
         MERGE (hub:AiGuidanceHub {id: 'decision_hub'})
@@ -142,7 +152,7 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
         async with safe_neo4j_session(self.driver, self.database) as session:
             await session.execute_write(lambda tx: tx.run(query, params))
 
-    async def register_tools(self, server) -> int:
+    async def register_tools(self, server: Any) -> int:
         """Register decision incarnation-specific tools with the server."""
         server.mcp.add_tool(self.create_decision)
         server.mcp.add_tool(self.list_decisions)
@@ -154,7 +164,7 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
         logger.info("Decision support tools registered")
         return 0
 
-    async def get_guidance_hub(self):
+    async def get_guidance_hub(self) -> List[types.TextContent]:
         """Get the guidance hub for decision incarnation."""
         query = """
         MATCH (hub:AiGuidanceHub {id: 'decision_hub'})
@@ -163,13 +173,17 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                async def run_query(tx):
+
+                async def run_query(tx: AsyncTransaction) -> Any:
                     result = await tx.run(query, {})
                     return await result.data()
+
                 results = await session.execute_read(run_query)
 
                 if results and len(results) > 0:
-                    return [types.TextContent(type="text", text=results[0]["description"])]
+                    return [
+                        types.TextContent(type="text", text=results[0]["description"])
+                    ]
                 else:
                     # If hub doesn't exist, create it
                     await self.ensure_decision_hub_exists()
@@ -178,13 +192,23 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
         except Exception as e:
             logger.error(f"Error retrieving decision guidance hub: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
+
     async def create_decision(
         self,
-        title: str = Field(..., description="Title of the decision to be made"),
-        description: str = Field(..., description="Description of the decision context and goals"),
-        deadline: Optional[str] = Field(None, description="Optional deadline for the decision (YYYY-MM-DD)"),
-        stakeholders: Optional[List[str]] = Field(None, description="List of stakeholders involved"),
-        tags: Optional[List[str]] = Field(None, description="Tags for categorizing the decision")
+        title: Annotated[str, Field(description="Title of the decision to be made")],
+        description: Annotated[
+            str, Field(description="Description of the decision context and goals")
+        ],
+        deadline: Annotated[
+            Optional[str],
+            Field(description="Optional deadline for the decision (YYYY-MM-DD)"),
+        ] = None,
+        stakeholders: Annotated[
+            Optional[List[str]], Field(description="List of stakeholders involved")
+        ] = None,
+        tags: Annotated[
+            Optional[List[str]], Field(description="Tags for categorizing the decision")
+        ] = None,
     ) -> List[types.TextContent]:
         """Create a new decision in the decision support system."""
         decision_id = str(uuid.uuid4())
@@ -208,11 +232,14 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
             "title": title,
             "description": description,
             "tags": decision_tags,
-            "stakeholders": decision_stakeholders
+            "stakeholders": decision_stakeholders,
         }
 
         if deadline:
-            query = query.replace("stakeholders: $stakeholders", "stakeholders: $stakeholders, deadline: $deadline")
+            query = query.replace(
+                "stakeholders: $stakeholders",
+                "stakeholders: $stakeholders, deadline: $deadline",
+            )
             params["deadline"] = deadline
 
         query += """
@@ -224,7 +251,9 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(lambda tx: self._read_query(tx, query, params))
+                results_json = await session.execute_write(
+                    lambda tx: self._read_query(tx, query, params)
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -238,25 +267,38 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
                         text_response += f"**Deadline:** {deadline}\n\n"
 
                     if stakeholders:
-                        text_response += f"**Stakeholders:** {', '.join(stakeholders)}\n\n"
+                        text_response += (
+                            f"**Stakeholders:** {', '.join(stakeholders)}\n\n"
+                        )
 
                     if tags:
                         text_response += f"**Tags:** {', '.join(tags)}\n\n"
 
-                    text_response += "You can now add alternatives using `add_alternative(decision_id=\"" + decision_id + "\", name=\"...\", description=\"...\")`"
+                    text_response += (
+                        'You can now add alternatives using `add_alternative(decision_id="'
+                        + decision_id
+                        + '", name="...", description="...")`'
+                    )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text="Error creating decision")]
+                    return [
+                        types.TextContent(type="text", text="Error creating decision")
+                    ]
         except Exception as e:
             logger.error(f"Error creating decision: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def list_decisions(
         self,
-        status: Optional[str] = Field(None, description="Filter by status (Open, In Progress, Decided)"),
-        tag: Optional[str] = Field(None, description="Filter by tag"),
-        limit: int = Field(10, description="Maximum number of decisions to return")
+        status: Annotated[
+            Optional[str],
+            Field(description="Filter by status (Open, In Progress, Decided)"),
+        ] = None,
+        tag: Annotated[Optional[str], Field(description="Filter by tag")] = None,
+        limit: Annotated[
+            int, Field(description="Maximum number of decisions to return")
+        ] = 10,
     ) -> List[types.TextContent]:
         """List decisions with optional filtering."""
         query = """
@@ -291,7 +333,9 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(lambda tx: self._read_query(tx, query, params))
+                results_json = await session.execute_read(
+                    lambda tx: self._read_query(tx, query, params)
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -302,18 +346,22 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
                     if tag:
                         text_response += f"**Tag:** {tag}\n\n"
 
-                    text_response += "| ID | Title | Status | Alternatives | Deadline |\n"
-                    text_response += "| -- | ----- | ------ | ------------ | -------- |\n"
+                    text_response += (
+                        "| ID | Title | Status | Alternatives | Deadline |\n"
+                    )
+                    text_response += (
+                        "| -- | ----- | ------ | ------------ | -------- |\n"
+                    )
 
                     for d in results:
-                        deadline = d.get('deadline', '-')
-                        title = d.get('title', 'Untitled')[:30]
-                        if len(d.get('title', '')) > 30:
+                        deadline = d.get("deadline", "-")
+                        title = d.get("title", "Untitled")[:30]
+                        if len(d.get("title", "")) > 30:
                             title += "..."
 
                         text_response += f"| {d.get('id', 'unknown')} | {title} | {d.get('status', 'Unknown')} | {d.get('alternative_count', 0)} | {deadline} |\n"
 
-                    text_response += "\nTo view full details of a decision, use `get_decision(id=\"decision-id\")`"
+                    text_response += '\nTo view full details of a decision, use `get_decision(id="decision-id")`'
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
@@ -326,16 +374,23 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
                         filter_msg += f" tagged as '{tag}'"
 
                     if filter_msg:
-                        return [types.TextContent(type="text", text=f"No decisions found{filter_msg}.")]
+                        return [
+                            types.TextContent(
+                                type="text", text=f"No decisions found{filter_msg}."
+                            )
+                        ]
                     else:
-                        return [types.TextContent(type="text", text="No decisions found in the database.")]
+                        return [
+                            types.TextContent(
+                                type="text", text="No decisions found in the database."
+                            )
+                        ]
         except Exception as e:
             logger.error(f"Error listing decisions: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def get_decision(
-        self,
-        id: str = Field(..., description="ID of the decision to retrieve")
+        self, id: Annotated[str, Field(description="ID of the decision to retrieve")]
     ) -> List[types.TextContent]:
         """Get detailed information about a specific decision."""
         query = """
@@ -359,7 +414,9 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -370,47 +427,79 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
                     text_response += f"**Status:** {d.get('status', 'Unknown')}\n"
                     text_response += f"**Created:** {d.get('created_at', 'Unknown')}\n"
 
-                    if d.get('deadline'):
+                    if d.get("deadline"):
                         text_response += f"**Deadline:** {d.get('deadline')}\n"
 
-                    if d.get('stakeholders'):
+                    if d.get("stakeholders"):
                         text_response += f"**Stakeholders:** {', '.join(d.get('stakeholders', []))}\n"
 
-                    if d.get('tags'):
+                    if d.get("tags"):
                         text_response += f"**Tags:** {', '.join(d.get('tags', []))}\n"
 
                     text_response += f"\n## Description\n\n{d.get('description', 'No description')}\n\n"
 
                     text_response += "## Summary\n\n"
                     text_response += f"This decision has {d.get('alternative_count', 0)} alternatives "
-                    text_response += f"and {d.get('metric_count', 0)} evaluation metrics.\n\n"
+                    text_response += (
+                        f"and {d.get('metric_count', 0)} evaluation metrics.\n\n"
+                    )
 
-                    if d.get('alternative_count', 0) > 0:
-                        text_response += "Use `list_alternatives(decision_id=\"" + id + "\")` to view alternatives.\n"
+                    if d.get("alternative_count", 0) > 0:
+                        text_response += (
+                            'Use `list_alternatives(decision_id="'
+                            + id
+                            + '")` to view alternatives.\n'
+                        )
                     else:
-                        text_response += "Add alternatives using `add_alternative(decision_id=\"" + id + "\", name=\"...\", description=\"...\").\n"
+                        text_response += (
+                            'Add alternatives using `add_alternative(decision_id="'
+                            + id
+                            + '", name="...", description="...").\n'
+                        )
 
-                    if d.get('metric_count', 0) > 0:
-                        text_response += "Use `list_metrics(decision_id=\"" + id + "\")` to view metrics.\n"
+                    if d.get("metric_count", 0) > 0:
+                        text_response += (
+                            'Use `list_metrics(decision_id="'
+                            + id
+                            + '")` to view metrics.\n'
+                        )
                     else:
-                        text_response += "Add metrics using `add_metric(decision_id=\"" + id + "\", name=\"...\", description=\"...\").\n"
+                        text_response += (
+                            'Add metrics using `add_metric(decision_id="'
+                            + id
+                            + '", name="...", description="...").\n'
+                        )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"No decision found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No decision found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error retrieving decision: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def add_alternative(
         self,
-        decision_id: str = Field(..., description="ID of the decision"),
-        name: str = Field(..., description="Name of the alternative"),
-        description: str = Field(..., description="Description of the alternative"),
-        expected_value: Optional[float] = Field(None, description="Initial expected value assessment"),
-        confidence: Optional[float] = Field(None, description="Confidence in the expected value (0-1)"),
-        pros: Optional[List[str]] = Field(None, description="List of pros for this alternative"),
-        cons: Optional[List[str]] = Field(None, description="List of cons for this alternative")
+        decision_id: Annotated[str, Field(description="ID of the decision")],
+        name: Annotated[str, Field(description="Name of the alternative")],
+        description: Annotated[
+            str, Field(description="Description of the alternative")
+        ],
+        expected_value: Annotated[
+            Optional[float], Field(description="Initial expected value assessment")
+        ] = None,
+        confidence: Annotated[
+            Optional[float], Field(description="Confidence in the expected value (0-1)")
+        ] = None,
+        pros: Annotated[
+            Optional[List[str]], Field(description="List of pros for this alternative")
+        ] = None,
+        cons: Annotated[
+            Optional[List[str]], Field(description="List of cons for this alternative")
+        ] = None,
     ) -> List[types.TextContent]:
         """Add an alternative to a decision."""
         alternative_id = str(uuid.uuid4())
@@ -430,17 +519,19 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
         CREATE (a)-[:FOR_DECISION]->(d)
         """
 
-        params = {
+        params: Dict[str, Any] = {
             "id": alternative_id,
             "decision_id": decision_id,
             "name": name,
             "description": description,
             "pros": alternative_pros,
-            "cons": alternative_cons
+            "cons": alternative_cons,
         }
 
         if expected_value is not None:
-            query = query.replace("cons: $cons", "cons: $cons, expected_value: $expected_value")
+            query = query.replace(
+                "cons: $cons", "cons: $cons, expected_value: $expected_value"
+            )
             params["expected_value"] = expected_value
 
         if confidence is not None:
@@ -455,7 +546,9 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -482,24 +575,47 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
                         for i, con in enumerate(cons, 1):
                             text_response += f"{i}. {con}\n"
 
-                    text_response += "\nYou can now add evidence using `add_evidence(alternative_id=\"" + alternative_id + "\", content=\"...\", impact=\"...\")`"
+                    text_response += (
+                        '\nYou can now add evidence using `add_evidence(alternative_id="'
+                        + alternative_id
+                        + '", content="...", impact="...")`'
+                    )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"Error adding alternative. Check if decision ID {decision_id} exists.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Error adding alternative. Check if decision ID {decision_id} exists.",
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error adding alternative: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def add_metric(
         self,
-        decision_id: str = Field(..., description="ID of the decision"),
-        name: str = Field(..., description="Name of the metric"),
-        description: str = Field(..., description="Description of what the metric measures"),
-        weight: float = Field(1.0, description="Weight of this metric in decision-making (0-10)"),
-        target_direction: str = Field("maximize", description="Whether to maximize or minimize this metric"),
-        scale: Optional[str] = Field(None, description="Scale of measurement (e.g., 'monetary', 'percentage', 'rating')"),
-        unit: Optional[str] = Field(None, description="Unit of measurement (e.g., '$', '%', '1-5')")
+        decision_id: Annotated[str, Field(description="ID of the decision")],
+        name: Annotated[str, Field(description="Name of the metric")],
+        description: Annotated[
+            str, Field(description="Description of what the metric measures")
+        ],
+        weight: Annotated[
+            float, Field(description="Weight of this metric in decision-making (0-10)")
+        ] = 1.0,
+        target_direction: Annotated[
+            str, Field(description="Whether to maximize or minimize this metric")
+        ] = "maximize",
+        scale: Annotated[
+            Optional[str],
+            Field(
+                description="Scale of measurement (e.g., 'monetary', 'percentage', 'rating')"
+            ),
+        ] = None,
+        unit: Annotated[
+            Optional[str],
+            Field(description="Unit of measurement (e.g., '$', '%', '1-5')"),
+        ] = None,
     ) -> List[types.TextContent]:
         """Add an evaluation metric to a decision."""
         metric_id = str(uuid.uuid4())
@@ -523,15 +639,19 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
             "name": name,
             "description": description,
             "weight": weight,
-            "target_direction": target_direction
+            "target_direction": target_direction,
         }
 
         if scale:
-            query = query.replace("created_at: datetime()", "created_at: datetime(), scale: $scale")
+            query = query.replace(
+                "created_at: datetime()", "created_at: datetime(), scale: $scale"
+            )
             params["scale"] = scale
 
         if unit:
-            query = query.replace("created_at: datetime()", "created_at: datetime(), unit: $unit")
+            query = query.replace(
+                "created_at: datetime()", "created_at: datetime(), unit: $unit"
+            )
             params["unit"] = unit
 
         query += """
@@ -540,7 +660,9 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -560,23 +682,44 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
                     if unit:
                         text_response += f"**Unit:** {unit}\n"
 
-                    text_response += "\nYou can now rate alternatives on this metric using `rate_alternative(metric_id=\"" + metric_id + "\", alternative_id=\"...\", value=\"...\")`"
+                    text_response += (
+                        '\nYou can now rate alternatives on this metric using `rate_alternative(metric_id="'
+                        + metric_id
+                        + '", alternative_id="...", value="...")`'
+                    )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"Error adding metric. Check if decision ID {decision_id} exists.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Error adding metric. Check if decision ID {decision_id} exists.",
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error adding metric: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def add_evidence(
         self,
-        alternative_id: str = Field(..., description="ID of the alternative"),
-        content: str = Field(..., description="Evidence content"),
-        impact: str = Field(..., description="Whether this evidence supports or contradicts the alternative (supports, contradicts, neutral)"),
-        strength: Optional[float] = Field(None, description="Strength of the evidence (0-1)"),
-        source: Optional[str] = Field(None, description="Source of the evidence"),
-        metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata about the evidence")
+        alternative_id: Annotated[str, Field(description="ID of the alternative")],
+        content: Annotated[str, Field(description="Evidence content")],
+        impact: Annotated[
+            str,
+            Field(
+                description="Whether this evidence supports or contradicts the alternative (supports, contradicts, neutral)"
+            ),
+        ],
+        strength: Annotated[
+            Optional[float], Field(description="Strength of the evidence (0-1)")
+        ] = None,
+        source: Annotated[
+            Optional[str], Field(description="Source of the evidence")
+        ] = None,
+        metadata: Annotated[
+            Optional[Dict[str, Any]],
+            Field(description="Additional metadata about the evidence"),
+        ] = None,
     ) -> List[types.TextContent]:
         """Add evidence for or against an alternative."""
         evidence_id = str(uuid.uuid4())
@@ -596,20 +739,26 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
             "id": evidence_id,
             "alternative_id": alternative_id,
             "content": content,
-            "impact": impact
+            "impact": impact,
         }
 
         if strength is not None:
-            query = query.replace("created_at: datetime()", "created_at: datetime(), strength: $strength")
+            query = query.replace(
+                "created_at: datetime()", "created_at: datetime(), strength: $strength"
+            )
             params["strength"] = str(strength)
 
         if source:
-            query = query.replace("created_at: datetime()", "created_at: datetime(), source: $source")
+            query = query.replace(
+                "created_at: datetime()", "created_at: datetime(), source: $source"
+            )
             params["source"] = source
 
         if metadata:
             metadata_json = json.dumps(metadata)
-            query = query.replace("created_at: datetime()", "created_at: datetime(), metadata: $metadata")
+            query = query.replace(
+                "created_at: datetime()", "created_at: datetime(), metadata: $metadata"
+            )
             params["metadata"] = metadata_json
 
         # Update alternative's expected value if strength is provided
@@ -643,7 +792,9 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -671,7 +822,12 @@ Each decision maintains a complete audit trail of all inputs, evidence, and reas
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"Error adding evidence. Check if alternative ID {alternative_id} exists.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Error adding evidence. Check if alternative ID {alternative_id} exists.",
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error adding evidence: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]

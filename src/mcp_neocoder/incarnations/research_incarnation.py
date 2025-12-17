@@ -6,18 +6,18 @@ providing tools for scientific workflow management, hypothesis tracking, experim
 and results publication.
 """
 
+import datetime
 import json
 import logging
 import uuid
-import datetime
-from typing import Dict, Any, List, Optional, Union
+from typing import Annotated, Any, Dict, List, Optional, Union
 
 import mcp.types as types
+from neo4j import AsyncDriver, AsyncManagedTransaction, AsyncTransaction
 from pydantic import Field
-from neo4j import AsyncDriver, AsyncTransaction, AsyncManagedTransaction
 
-from .base_incarnation import BaseIncarnation
 from ..event_loop_manager import safe_neo4j_session
+from .base_incarnation import BaseIncarnation
 
 logger = logging.getLogger("mcp_neocoder.research_incarnation")
 
@@ -50,7 +50,7 @@ class ResearchIncarnation(BaseIncarnation):
         "record_observation",
         "list_observations",
         "compute_statistics",
-        "create_publication_draft"
+        "create_publication_draft",
     ]
 
     def __init__(self, driver: AsyncDriver, database: str = "neo4j"):
@@ -64,18 +64,29 @@ class ResearchIncarnation(BaseIncarnation):
 
     from typing import LiteralString
 
-    async def _read_query(self, tx: Union["AsyncTransaction", "AsyncManagedTransaction"], query, params: dict) -> str:
+    async def _read_query(
+        self,
+        tx: Union["AsyncTransaction", "AsyncManagedTransaction"],
+        query: "LiteralString",
+        params: dict,
+    ) -> str:
         """Execute a read query and return results as JSON string."""
         raw_results = await tx.run(query, params)
         eager_results = await raw_results.to_eager_result()
         return json.dumps([r.data() for r in eager_results.records], default=str)
 
-    async def _write(self, tx, query: LiteralString, params: dict):
+    async def _write(
+        self,
+        tx: Union["AsyncTransaction", "AsyncManagedTransaction"],
+        query: "LiteralString",
+        params: dict,
+    ) -> Any:
         """Execute a write query and return results as JSON string."""
         result = await tx.run(query, params or {})
         summary = await result.consume()
         return summary
-    async def initialize_schema(self):
+
+    async def initialize_schema(self) -> None:
         """Initialize the Neo4j schema for research orchestration."""
         # Define constraints and indexes for research schema
         # Define constraints and indexes for research schema
@@ -86,10 +97,9 @@ class ResearchIncarnation(BaseIncarnation):
             "CREATE CONSTRAINT research_protocol_id IF NOT EXISTS FOR (p:Protocol) REQUIRE p.id IS UNIQUE",
             "CREATE CONSTRAINT research_observation_id IF NOT EXISTS FOR (o:Observation) REQUIRE o.id IS UNIQUE",
             "CREATE CONSTRAINT research_run_id IF NOT EXISTS FOR (r:Run) REQUIRE r.id IS UNIQUE",
-
             "CREATE INDEX research_hypothesis_status IF NOT EXISTS FOR (h:Hypothesis) ON (h.status)",
             "CREATE INDEX research_experiment_status IF NOT EXISTS FOR (e:Experiment) ON (e.status)",
-            "CREATE INDEX research_protocol_name IF NOT EXISTS FOR (p:Protocol) ON (p.name)"
+            "CREATE INDEX research_protocol_name IF NOT EXISTS FOR (p:Protocol) ON (p.name)",
         ]
 
         try:
@@ -106,7 +116,7 @@ class ResearchIncarnation(BaseIncarnation):
             logger.error(f"Error initializing research schema: {e}")
             raise
 
-    async def ensure_research_hub_exists(self):
+    async def ensure_research_hub_exists(self) -> None:
         """Create the research guidance hub if it doesn't exist."""
         query = """
         MERGE (hub:AiGuidanceHub {id: 'research_hub'})
@@ -157,7 +167,7 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
         async with safe_neo4j_session(self.driver, self.database) as session:
             await session.execute_write(lambda tx: tx.run(query, params))
 
-    async def get_guidance_hub(self):
+    async def get_guidance_hub(self) -> List[types.TextContent]:
         """Get the guidance hub for research incarnation."""
         query = """
         MATCH (hub:AiGuidanceHub {id: 'research_hub'})
@@ -166,14 +176,17 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                async def read_query(tx):
+
+                async def read_query(tx: AsyncTransaction) -> Any:
                     return await self._read_query(tx, query, {})
 
                 results_json = await session.execute_read(read_query)
                 results = json.loads(results_json)
 
                 if results and results[0]:
-                    return [types.TextContent(type="text", text=results[0]["description"])]
+                    return [
+                        types.TextContent(type="text", text=results[0]["description"])
+                    ]
                 else:
                     # If hub doesn't exist, create it
                     await self.ensure_research_hub_exists()
@@ -185,10 +198,18 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
     async def register_hypothesis(
         self,
-        text: str = Field(..., description="The hypothesis statement"),
-        description: Optional[str] = Field(None, description="Detailed description and context"),
-        prior_probability: float = Field(0.5, description="Prior probability (0-1) of the hypothesis being true"),
-        tags: Optional[List[str]] = Field(None, description="Tags for categorizing the hypothesis")
+        text: Annotated[str, Field(description="The hypothesis statement")],
+        description: Annotated[
+            Optional[str], Field(description="Detailed description and context")
+        ] = None,
+        prior_probability: Annotated[
+            float,
+            Field(description="Prior probability (0-1) of the hypothesis being true"),
+        ] = 0.5,
+        tags: Annotated[
+            Optional[List[str]],
+            Field(description="Tags for categorizing the hypothesis"),
+        ] = None,
     ) -> List[types.TextContent]:
         """Register a new scientific hypothesis in the knowledge graph."""
         hypothesis_id = str(uuid.uuid4())
@@ -210,11 +231,13 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
             "id": hypothesis_id,
             "text": text,
             "prior_probability": prior_probability,
-            "tags": hypothesis_tags
+            "tags": hypothesis_tags,
         }
 
         if description:
-            query = query.replace("tags: $tags", "tags: $tags, description: $description")
+            query = query.replace(
+                "tags: $tags", "tags: $tags, description: $description"
+            )
             params["description"] = description
 
         query += """
@@ -226,7 +249,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(lambda tx: self._read_query(tx, query, params))
+                results_json = await session.execute_write(
+                    lambda tx: self._read_query(tx, query, params)
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -245,16 +270,25 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text="Error registering hypothesis")]
+                    return [
+                        types.TextContent(
+                            type="text", text="Error registering hypothesis"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error registering hypothesis: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def list_hypotheses(
         self,
-        status: Optional[str] = Field(None, description="Filter by status (Active, Confirmed, Rejected)"),
-        tag: Optional[str] = Field(None, description="Filter by tag"),
-        limit: int = Field(10, description="Maximum number of hypotheses to return")
+        status: Annotated[
+            Optional[str],
+            Field(description="Filter by status (Active, Confirmed, Rejected)"),
+        ] = None,
+        tag: Annotated[Optional[str], Field(description="Filter by tag")] = None,
+        limit: Annotated[
+            int, Field(description="Maximum number of hypotheses to return")
+        ] = 10,
     ) -> List[types.TextContent]:
         """List scientific hypotheses with optional filtering."""
         query = """
@@ -286,7 +320,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -297,18 +333,24 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                     if tag:
                         text_response += f"**Tag:** {tag}\n\n"
 
-                    text_response += "| ID | Hypothesis | Status | Current Probability | Tags |\n"
-                    text_response += "| -- | ---------- | ------ | ------------------- | ---- |\n"
+                    text_response += (
+                        "| ID | Hypothesis | Status | Current Probability | Tags |\n"
+                    )
+                    text_response += (
+                        "| -- | ---------- | ------ | ------------------- | ---- |\n"
+                    )
 
                     for h in results:
-                        tags_str = ", ".join(h.get("tags", [])) if h.get("tags") else "-"
+                        tags_str = (
+                            ", ".join(h.get("tags", [])) if h.get("tags") else "-"
+                        )
                         hypothesis_text = h.get("text", "Unknown")[:50]
                         if len(h.get("text", "")) > 50:
                             hypothesis_text += "..."
 
                         text_response += f"| {h.get('id', 'unknown')} | {hypothesis_text} | {h.get('status', 'Unknown')} | {h.get('current_probability', 'Unknown')} | {tags_str} |\n"
 
-                    text_response += "\nTo view full details of a hypothesis, use `get_hypothesis(id=\"hypothesis-id\")`"
+                    text_response += '\nTo view full details of a hypothesis, use `get_hypothesis(id="hypothesis-id")`'
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
@@ -321,16 +363,23 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                         filter_msg += f" tagged as '{tag}'"
 
                     if filter_msg:
-                        return [types.TextContent(type="text", text=f"No hypotheses found{filter_msg}.")]
+                        return [
+                            types.TextContent(
+                                type="text", text=f"No hypotheses found{filter_msg}."
+                            )
+                        ]
                     else:
-                        return [types.TextContent(type="text", text="No hypotheses found in the database.")]
+                        return [
+                            types.TextContent(
+                                type="text", text="No hypotheses found in the database."
+                            )
+                        ]
         except Exception as e:
             logger.error(f"Error listing hypotheses: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def get_hypothesis(
-        self,
-        id: str = Field(..., description="ID of the hypothesis to retrieve")
+        self, id: Annotated[str, Field(description="ID of the hypothesis to retrieve")]
     ) -> List[types.TextContent]:
         """Get detailed information about a specific hypothesis."""
         query = """
@@ -352,7 +401,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -374,26 +425,50 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                     text_response += "\n## Experiments\n\n"
                     text_response += f"This hypothesis has been tested in {h.get('experiment_count', 0)} experiments.\n"
 
-                    if h.get('experiment_count', 0) > 0:
-                        text_response += "\nUse `list_experiments(hypothesis_id=\"" + id + "\")` to view related experiments."
+                    if h.get("experiment_count", 0) > 0:
+                        text_response += (
+                            '\nUse `list_experiments(hypothesis_id="'
+                            + id
+                            + '")` to view related experiments.'
+                        )
                     else:
-                        text_response += "\nUse `create_protocol(hypothesis_id=\"" + id + "\")` to design an experiment for this hypothesis."
+                        text_response += (
+                            '\nUse `create_protocol(hypothesis_id="'
+                            + id
+                            + '")` to design an experiment for this hypothesis.'
+                        )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"No hypothesis found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No hypothesis found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error retrieving hypothesis: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def update_hypothesis(
         self,
-        id: str = Field(..., description="ID of the hypothesis to update"),
-        text: Optional[str] = Field(None, description="Updated hypothesis statement"),
-        description: Optional[str] = Field(None, description="Updated description"),
-        status: Optional[str] = Field(None, description="Updated status (Active, Confirmed, Rejected)"),
-        current_probability: Optional[float] = Field(None, description="Updated probability assessment"),
-        tags: Optional[List[str]] = Field(None, description="Updated tags (replaces existing tags)")
+        id: Annotated[str, Field(description="ID of the hypothesis to update")],
+        text: Annotated[
+            Optional[str], Field(description="Updated hypothesis statement")
+        ] = None,
+        description: Annotated[
+            Optional[str], Field(description="Updated description")
+        ] = None,
+        status: Annotated[
+            Optional[str],
+            Field(description="Updated status (Active, Confirmed, Rejected)"),
+        ] = None,
+        current_probability: Annotated[
+            Optional[float], Field(description="Updated probability assessment")
+        ] = None,
+        tags: Annotated[
+            Optional[List[str]],
+            Field(description="Updated tags (replaces existing tags)"),
+        ] = None,
     ) -> List[types.TextContent]:
         """Update an existing hypothesis."""
         # Build dynamic SET clause based on provided parameters
@@ -432,28 +507,44 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
-                    return [types.TextContent(
-                        type="text",
-                        text=f"Successfully updated hypothesis '{results[0].get('text', id)}'"
-                    )]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Successfully updated hypothesis '{results[0].get('text', id)}'",
+                        )
+                    ]
                 else:
-                    return [types.TextContent(type="text", text=f"No hypothesis found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No hypothesis found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error updating hypothesis: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def create_protocol(
         self,
-        name: str = Field(..., description="Name of the protocol"),
-        description: str = Field(..., description="Protocol description"),
-        steps: List[str] = Field(..., description="Ordered list of protocol steps"),
-        expected_observations: List[str] = Field(..., description="Expected observations if hypothesis is true"),
-        materials: Optional[List[str]] = Field(None, description="Required materials and equipment"),
-        controls: Optional[List[str]] = Field(None, description="Control conditions")
+        name: Annotated[str, Field(description="Name of the protocol")],
+        description: Annotated[str, Field(description="Protocol description")],
+        steps: Annotated[
+            List[str], Field(description="Ordered list of protocol steps")
+        ],
+        expected_observations: Annotated[
+            List[str], Field(description="Expected observations if hypothesis is true")
+        ],
+        materials: Annotated[
+            Optional[List[str]], Field(description="Required materials and equipment")
+        ] = None,
+        controls: Annotated[
+            Optional[List[str]], Field(description="Control conditions")
+        ] = None,
     ) -> List[types.TextContent]:
         """Create an experimental protocol for scientific experiments."""
         protocol_id = str(uuid.uuid4())
@@ -475,17 +566,21 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
             "name": name,
             "description": description,
             "steps": steps,
-            "expected_observations": expected_observations
+            "expected_observations": expected_observations,
         }
 
         if materials:
-            query = query.replace("expected_observations: $expected_observations",
-                                "expected_observations: $expected_observations, materials: $materials")
+            query = query.replace(
+                "expected_observations: $expected_observations",
+                "expected_observations: $expected_observations, materials: $materials",
+            )
             params["materials"] = materials
 
         if controls:
-            query = query.replace("expected_observations: $expected_observations",
-                                "expected_observations: $expected_observations, controls: $controls")
+            query = query.replace(
+                "expected_observations: $expected_observations",
+                "expected_observations: $expected_observations, controls: $controls",
+            )
             params["controls"] = controls
 
         query += """
@@ -497,7 +592,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -525,18 +622,26 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                         for i, ctrl in enumerate(controls, 1):
                             text_response += f"{i}. {ctrl}\n"
 
-                    text_response += "\nYou can now create experiments using this protocol with `create_experiment(protocol_id=\"" + protocol_id + "\", hypothesis_id=\"your-hypothesis-id\")`"
+                    text_response += (
+                        '\nYou can now create experiments using this protocol with `create_experiment(protocol_id="'
+                        + protocol_id
+                        + '", hypothesis_id="your-hypothesis-id")`'
+                    )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text="Error creating protocol")]
+                    return [
+                        types.TextContent(type="text", text="Error creating protocol")
+                    ]
         except Exception as e:
             logger.error(f"Error creating protocol: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def list_protocols(
         self,
-        limit: int = Field(10, description="Maximum number of protocols to return")
+        limit: Annotated[
+            int, Field(description="Maximum number of protocols to return")
+        ] = 10,
     ) -> List[types.TextContent]:
         """List available experimental protocols."""
         query = """
@@ -556,7 +661,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -571,18 +678,21 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
                         text_response += f"| {p.get('id', 'unknown')} | {p.get('name', 'Unknown')} | {description} | {p.get('usage_count', 0)} |\n"
 
-                    text_response += "\nTo view full details of a protocol, use `get_protocol(id=\"protocol-id\")`"
+                    text_response += '\nTo view full details of a protocol, use `get_protocol(id="protocol-id")`'
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text="No protocols found in the database.")]
+                    return [
+                        types.TextContent(
+                            type="text", text="No protocols found in the database."
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error listing protocols: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def get_protocol(
-        self,
-        id: str = Field(..., description="ID of the protocol to retrieve")
+        self, id: Annotated[str, Field(description="ID of the protocol to retrieve")]
     ) -> List[types.TextContent]:
         """Get detailed information about a specific protocol."""
         query = """
@@ -601,7 +711,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -609,7 +721,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
                     text_response = f"# Protocol: {p.get('name', 'Unknown')}\n\n"
                     text_response += f"**ID:** {p.get('id', id)}\n"
-                    text_response += f"**Created:** {p.get('created_at', 'Unknown')}\n\n"
+                    text_response += (
+                        f"**Created:** {p.get('created_at', 'Unknown')}\n\n"
+                    )
 
                     text_response += f"**Description:**\n{p.get('description', 'No description')}\n\n"
 
@@ -635,21 +749,33 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                         for i, ctrl in enumerate(controls, 1):
                             text_response += f"{i}. {ctrl}\n"
 
-                    text_response += "\n\nUse `create_experiment(protocol_id=\"" + id + "\", hypothesis_id=\"your-hypothesis-id\")` to create an experiment using this protocol."
+                    text_response += (
+                        '\n\nUse `create_experiment(protocol_id="'
+                        + id
+                        + '", hypothesis_id="your-hypothesis-id")` to create an experiment using this protocol.'
+                    )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"No protocol found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No protocol found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error retrieving protocol: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def create_experiment(
         self,
-        name: str = Field(..., description="Name of the experiment"),
-        hypothesis_id: str = Field(..., description="ID of the hypothesis to test"),
-        protocol_id: str = Field(..., description="ID of the protocol to follow"),
-        description: Optional[str] = Field(None, description="Additional experiment details")
+        name: Annotated[str, Field(description="Name of the experiment")],
+        hypothesis_id: Annotated[
+            str, Field(description="ID of the hypothesis to test")
+        ],
+        protocol_id: Annotated[str, Field(description="ID of the protocol to follow")],
+        description: Annotated[
+            Optional[str], Field(description="Additional experiment details")
+        ] = None,
     ) -> List[types.TextContent]:
         """Create a new experiment to test a hypothesis using a protocol."""
         experiment_id = str(uuid.uuid4())
@@ -671,11 +797,14 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
             "experiment_id": experiment_id,
             "name": name,
             "hypothesis_id": hypothesis_id,
-            "protocol_id": protocol_id
+            "protocol_id": protocol_id,
         }
 
         if description:
-            query = query.replace("created_at: datetime()", "created_at: datetime(), description: $description")
+            query = query.replace(
+                "created_at: datetime()",
+                "created_at: datetime(), description: $description",
+            )
             params["description"] = description
 
         query += """
@@ -684,7 +813,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -701,28 +832,45 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                     if description:
                         text_response += f"\n**Description:**\n{description}\n"
 
-                    text_response += "\nYou can now record observations using `record_observation(experiment_id=\"" + experiment_id + "\")`"
+                    text_response += (
+                        '\nYou can now record observations using `record_observation(experiment_id="'
+                        + experiment_id
+                        + '")`'
+                    )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"Error creating experiment. Check if the hypothesis ID '{hypothesis_id}' and protocol ID '{protocol_id}' exist.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Error creating experiment. Check if the hypothesis ID '{hypothesis_id}' and protocol ID '{protocol_id}' exist.",
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error creating experiment: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def list_experiments(
         self,
-        hypothesis_id: Optional[str] = Field(None, description="Filter by hypothesis ID"),
-        protocol_id: Optional[str] = Field(None, description="Filter by protocol ID"),
-        status: Optional[str] = Field(None, description="Filter by status (Planned, In Progress, Completed)"),
-        limit: int = Field(10, description="Maximum number of experiments to return")
+        hypothesis_id: Annotated[
+            Optional[str], Field(description="Filter by hypothesis ID")
+        ] = None,
+        protocol_id: Annotated[
+            Optional[str], Field(description="Filter by protocol ID")
+        ] = None,
+        status: Annotated[
+            Optional[str],
+            Field(description="Filter by status (Planned, In Progress, Completed)"),
+        ] = None,
+        limit: Annotated[
+            int, Field(description="Maximum number of experiments to return")
+        ] = 10,
     ) -> List[types.TextContent]:
         """List experiments with optional filtering."""
         query = """
         MATCH (e:Experiment)
         WHERE 1=1
         """
-
 
         params: Dict[str, Any] = {"limit": limit}
 
@@ -762,7 +910,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -770,10 +920,10 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
                     filters = []
                     if hypothesis_id:
-                        hypothesis_text = results[0].get('hypothesis_text', 'Unknown')
+                        hypothesis_text = results[0].get("hypothesis_text", "Unknown")
                         filters.append(f"Hypothesis: {hypothesis_text}")
                     if protocol_id:
-                        protocol_name = results[0].get('protocol_name', 'Unknown')
+                        protocol_name = results[0].get("protocol_name", "Unknown")
                         filters.append(f"Protocol: {protocol_name}")
                     if status:
                         filters.append(f"Status: {status}")
@@ -781,17 +931,21 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                     if filters:
                         text_response += f"Filtered by: {', '.join(filters)}\n\n"
 
-                    text_response += "| ID | Name | Status | Observations | Hypothesis |\n"
-                    text_response += "| -- | ---- | ------ | ------------ | ---------- |\n"
+                    text_response += (
+                        "| ID | Name | Status | Observations | Hypothesis |\n"
+                    )
+                    text_response += (
+                        "| -- | ---- | ------ | ------------ | ---------- |\n"
+                    )
 
                     for e in results:
-                        hypothesis = e.get('hypothesis_text', '')[:30]
-                        if len(e.get('hypothesis_text', '')) > 30:
+                        hypothesis = e.get("hypothesis_text", "")[:30]
+                        if len(e.get("hypothesis_text", "")) > 30:
                             hypothesis += "..."
 
                         text_response += f"| {e.get('id', 'unknown')} | {e.get('name', 'Unknown')} | {e.get('status', 'Unknown')} | {e.get('observation_count', 0)} | {hypothesis} |\n"
 
-                    text_response += "\nTo view full details of an experiment, use `get_experiment(id=\"experiment-id\")`"
+                    text_response += '\nTo view full details of an experiment, use `get_experiment(id="experiment-id")`'
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
@@ -804,9 +958,19 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                         filter_msg.append(f"status '{status}'")
 
                     if filter_msg:
-                        return [types.TextContent(type="text", text=f"No experiments found matching {' and '.join(filter_msg)}.")]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"No experiments found matching {' and '.join(filter_msg)}.",
+                            )
+                        ]
                     else:
-                        return [types.TextContent(type="text", text="No experiments found in the database.")]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text="No experiments found in the database.",
+                            )
+                        ]
         except Exception as e:
             logger.error(f"Error listing experiments: {e}")
 
@@ -814,7 +978,7 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
     async def get_experiment(
         self,
-        id: str = Field(..., description="ID of the experiment to retrieve")
+        id: Annotated[str, Field(description="ID of the experiment to retrieve")],
     ) -> List[types.TextContent]:
         """Get detailed information about a specific experiment."""
         query = """
@@ -840,7 +1004,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -849,7 +1015,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                     text_response = f"# Experiment: {e.get('name', 'Unknown')}\n\n"
                     text_response += f"**ID:** {e.get('id', id)}\n"
                     text_response += f"**Status:** {e.get('status', 'Unknown')}\n"
-                    text_response += f"**Created:** {e.get('created_at', 'Unknown')}\n\n"
+                    text_response += (
+                        f"**Created:** {e.get('created_at', 'Unknown')}\n\n"
+                    )
 
                     if e.get("description"):
                         text_response += f"**Description:**\n{e.get('description')}\n\n"
@@ -862,25 +1030,48 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                     for i, step in enumerate(steps, 1):
                         text_response += f"{i}. {step}\n"
 
-                    text_response += f"\n## Observations ({e.get('observation_count', 0)})\n\n"
-                    if e.get('observation_count', 0) > 0:
-                        text_response += "Use `list_observations(experiment_id=\"" + id + "\")` to view recorded observations.\n"
+                    text_response += (
+                        f"\n## Observations ({e.get('observation_count', 0)})\n\n"
+                    )
+                    if e.get("observation_count", 0) > 0:
+                        text_response += (
+                            'Use `list_observations(experiment_id="'
+                            + id
+                            + '")` to view recorded observations.\n'
+                        )
                     else:
-                        text_response += "No observations recorded yet. Use `record_observation(experiment_id=\"" + id + "\")` to add observations.\n"
+                        text_response += (
+                            'No observations recorded yet. Use `record_observation(experiment_id="'
+                            + id
+                            + '")` to add observations.\n'
+                        )
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"No experiment found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No experiment found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error retrieving experiment: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def update_experiment(
         self,
-        id: str = Field(..., description="ID of the experiment to update"),
-        name: Optional[str] = Field(None, description="Updated experiment name"),
-        description: Optional[str] = Field(None, description="Updated description"),
-        status: Optional[str] = Field(None, description="Updated status (Planned, In Progress, Completed)")
+        id: Annotated[str, Field(description="ID of the experiment to update")],
+        name: Annotated[
+            Optional[str], Field(description="Updated experiment name")
+        ] = None,
+        description: Annotated[
+            Optional[str], Field(description="Updated description")
+        ] = None,
+        status: Annotated[
+            Optional[str],
+            Field(
+                description="Updated status (Planned, In Progress, Completed, Failed)"
+            ),
+        ] = None,
     ) -> List[types.TextContent]:
         """Update an existing experiment."""
         # Build dynamic SET clause based on provided parameters
@@ -911,27 +1102,43 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_write(self._read_query, query, params)
+                results_json = await session.execute_write(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
-                    return [types.TextContent(
-                        type="text",
-                        text=f"Successfully updated experiment '{results[0].get('name', id)}'"
-                    )]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Successfully updated experiment '{results[0].get('name', id)}'",
+                        )
+                    ]
                 else:
-                    return [types.TextContent(type="text", text=f"No experiment found with ID '{id}'")]
+                    return [
+                        types.TextContent(
+                            type="text", text=f"No experiment found with ID '{id}'"
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error updating experiment: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def record_observation(
         self,
-        experiment_id: str = Field(..., description="ID of the experiment"),
-        content: str = Field(..., description="The observation content"),
-        supports_hypothesis: Optional[bool] = Field(None, description="Whether this observation supports the hypothesis"),
-        evidence_strength: Optional[float] = Field(None, description="Strength of evidence (0-1)"),
-        metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata about the observation")
+        experiment_id: Annotated[str, Field(description="ID of the experiment")],
+        content: Annotated[str, Field(description="The observation content")],
+        supports_hypothesis: Annotated[
+            Optional[bool],
+            Field(description="Whether this observation supports the hypothesis"),
+        ] = None,
+        evidence_strength: Annotated[
+            Optional[float], Field(description="Strength of evidence (0-1)")
+        ] = None,
+        metadata: Annotated[
+            Optional[Dict[str, Any]],
+            Field(description="Additional metadata about the observation"),
+        ] = None,
     ) -> List[types.TextContent]:
         """Record an experimental observation for a specific experiment."""
         observation_id = str(uuid.uuid4())
@@ -947,22 +1154,26 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
         CREATE (e)-[:HAS_OBSERVATION]->(o)
         """
 
-        params = {
+        params: Dict[str, Any] = {
             "experiment_id": experiment_id,
             "observation_id": observation_id,
             "content": content,
-            "supports_hypothesis": supports_hypothesis
+            "supports_hypothesis": supports_hypothesis,
         }
 
         if evidence_strength is not None:
-            query = query.replace("supports_hypothesis: $supports_hypothesis",
-                                "supports_hypothesis: $supports_hypothesis, evidence_strength: $evidence_strength")
+            query = query.replace(
+                "supports_hypothesis: $supports_hypothesis",
+                "supports_hypothesis: $supports_hypothesis, evidence_strength: $evidence_strength",
+            )
             params["evidence_strength"] = evidence_strength
 
         if metadata:
             metadata_json = json.dumps(metadata)
-            query = query.replace("supports_hypothesis: $supports_hypothesis",
-                                "supports_hypothesis: $supports_hypothesis, metadata: $metadata")
+            query = query.replace(
+                "supports_hypothesis: $supports_hypothesis",
+                "supports_hypothesis: $supports_hypothesis, metadata: $metadata",
+            )
             params["metadata"] = metadata_json
 
         # Update experiment status and hypotheses probability if evidence strength is provided
@@ -992,9 +1203,11 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                async def write_query(tx):
+
+                async def write_query(tx: AsyncTransaction) -> Any:
                     raw_result = await tx.run(query, params)
                     return await raw_result.to_eager_result()
+
                 result = await session.execute_write(write_query)
 
                 if result.records:
@@ -1019,15 +1232,22 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"Error recording observation. Check if experiment ID {experiment_id} exists.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Error recording observation. Check if experiment ID {experiment_id} exists.",
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error recording observation: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def list_observations(
         self,
-        experiment_id: str = Field(..., description="ID of the experiment"),
-        limit: int = Field(20, description="Maximum number of observations to return")
+        experiment_id: Annotated[str, Field(description="Filter by experiment ID")],
+        limit: Annotated[
+            int, Field(description="Maximum number of observations to return")
+        ] = 20,
     ) -> List[types.TextContent]:
         """List observations for a specific experiment."""
         query = """
@@ -1042,14 +1262,13 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
         LIMIT $limit
         """
 
-        params = {
-            "experiment_id": experiment_id,
-            "limit": limit
-        }
+        params = {"experiment_id": experiment_id, "limit": limit}
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -1059,14 +1278,18 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                     RETURN e.name AS name
                     """
 
-                    exp_result = await session.execute_read(self._read_query, exp_query, {"experiment_id": experiment_id})
+                    exp_result = await session.execute_read(
+                        self._read_query, exp_query, {"experiment_id": experiment_id}
+                    )
                     exp_data = json.loads(exp_result)
 
                     experiment_name = "Unknown"
                     if exp_data and len(exp_data) > 0:
                         experiment_name = exp_data[0].get("name", "Unknown")
 
-                    text_response = f"# Observations for Experiment: {experiment_name}\n\n"
+                    text_response = (
+                        f"# Observations for Experiment: {experiment_name}\n\n"
+                    )
 
                     for i, o in enumerate(results, 1):
                         text_response += f"## {i}. {o.get('timestamp', '')[:19]}\n\n"
@@ -1075,11 +1298,17 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                         details = []
 
                         if o.get("supports_hypothesis") is not None:
-                            supports = "Supports" if o.get("supports_hypothesis") else "Contradicts"
+                            supports = (
+                                "Supports"
+                                if o.get("supports_hypothesis")
+                                else "Contradicts"
+                            )
                             details.append(f"{supports} hypothesis")
 
                         if o.get("evidence_strength") is not None:
-                            details.append(f"Evidence strength: {o.get('evidence_strength')}")
+                            details.append(
+                                f"Evidence strength: {o.get('evidence_strength')}"
+                            )
 
                         if details:
                             text_response += f"*{', '.join(details)}*\n\n"
@@ -1091,20 +1320,29 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                                 for key, value in metadata.items():
                                     text_response += f"- **{key}:** {value}\n"
                                 text_response += "\n"
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.warning(f"Failed to parse metadata: {e}")
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"No observations found for experiment ID '{experiment_id}'.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"No observations found for experiment ID '{experiment_id}'.",
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error listing observations: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def compute_statistics(
         self,
-        experiment_id: str = Field(..., description="ID of the experiment to analyze"),
-        include_visualization: bool = Field(True, description="Include visualization of the data")
+        experiment_id: Annotated[
+            str, Field(description="ID of the experiment to analyze")
+        ],
+        include_visualization: Annotated[
+            bool, Field(description="Include visualization of the data")
+        ] = True,
     ) -> List[types.TextContent]:
         """Compute statistical analysis of experimental observations."""
         query = """
@@ -1122,7 +1360,9 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                results_json = await session.execute_read(self._read_query, query, params)
+                results_json = await session.execute_read(
+                    self._read_query, query, params
+                )
                 results = json.loads(results_json)
 
                 if results and len(results) > 0:
@@ -1135,24 +1375,41 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                            h.current_probability AS current_probability
                     """
 
-                    exp_result = await session.execute_read(self._read_query, exp_query, params)
+                    exp_result = await session.execute_read(
+                        self._read_query, exp_query, params
+                    )
                     exp_data = json.loads(exp_result)
 
                     if not exp_data or len(exp_data) == 0:
-                        return [types.TextContent(type="text", text=f"Could not find experiment with ID '{experiment_id}'.")]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Could not find experiment with ID '{experiment_id}'.",
+                            )
+                        ]
 
                     exp_info = exp_data[0]
 
                     # Calculate basic statistics
                     total_observations = len(results)
-                    supporting = sum(1 for o in results if o.get("supports_hypothesis") is True)
-                    contradicting = sum(1 for o in results if o.get("supports_hypothesis") is False)
+                    supporting = sum(
+                        1 for o in results if o.get("supports_hypothesis") is True
+                    )
+                    contradicting = sum(
+                        1 for o in results if o.get("supports_hypothesis") is False
+                    )
                     neutral = total_observations - supporting - contradicting
 
                     avg_evidence_strength = 0
-                    evidence_strengths = [o.get("evidence_strength") for o in results if o.get("evidence_strength") is not None]
+                    evidence_strengths = [
+                        o.get("evidence_strength")
+                        for o in results
+                        if o.get("evidence_strength") is not None
+                    ]
                     if evidence_strengths:
-                        avg_evidence_strength = sum(evidence_strengths) / len(evidence_strengths)
+                        avg_evidence_strength = sum(evidence_strengths) / len(
+                            evidence_strengths
+                        )
 
                     # Format the response
                     text_response = f"# Statistical Analysis: {exp_info.get('experiment_name', 'Unknown')}\n\n"
@@ -1178,19 +1435,29 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                     # Add conclusion
                     text_response += "## Conclusion\n\n"
 
-                    current_prob = float(exp_info.get('current_probability', 0.5))
-                    prior_prob = float(exp_info.get('prior_probability', 0.5))
+                    current_prob = float(exp_info.get("current_probability", 0.5))
+                    prior_prob = float(exp_info.get("prior_probability", 0.5))
 
                     if current_prob > 0.8:
-                        text_response += "The evidence strongly supports the hypothesis.\n"
+                        text_response += (
+                            "The evidence strongly supports the hypothesis.\n"
+                        )
                     elif current_prob > 0.6:
-                        text_response += "The evidence moderately supports the hypothesis.\n"
+                        text_response += (
+                            "The evidence moderately supports the hypothesis.\n"
+                        )
                     elif current_prob < 0.2:
-                        text_response += "The evidence strongly contradicts the hypothesis.\n"
+                        text_response += (
+                            "The evidence strongly contradicts the hypothesis.\n"
+                        )
                     elif current_prob < 0.4:
-                        text_response += "The evidence moderately contradicts the hypothesis.\n"
+                        text_response += (
+                            "The evidence moderately contradicts the hypothesis.\n"
+                        )
                     else:
-                        text_response += "The evidence is inconclusive regarding the hypothesis.\n"
+                        text_response += (
+                            "The evidence is inconclusive regarding the hypothesis.\n"
+                        )
 
                     if current_prob > prior_prob + 0.1:
                         text_response += "The experiment has substantially increased confidence in the hypothesis.\n"
@@ -1201,18 +1468,29 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
                     return [types.TextContent(type="text", text=text_response)]
                 else:
-                    return [types.TextContent(type="text", text=f"No observations found for experiment ID '{experiment_id}'.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"No observations found for experiment ID '{experiment_id}'.",
+                        )
+                    ]
         except Exception as e:
             logger.error(f"Error computing statistics: {e}")
             return [types.TextContent(type="text", text=f"Error: {e}")]
 
     async def create_publication_draft(
         self,
-        experiment_id: str = Field(..., description="ID of the experiment to document"),
-        title: str = Field(..., description="Publication title"),
-        authors: List[str] = Field(..., description="List of author names"),
-        include_abstract: bool = Field(True, description="Include an auto-generated abstract"),
-        include_figures: bool = Field(True, description="Include figures in the draft")
+        experiment_id: Annotated[
+            str, Field(description="ID of the experiment to document")
+        ],
+        title: Annotated[str, Field(description="Publication title")],
+        authors: Annotated[List[str], Field(description="List of author names")],
+        include_abstract: Annotated[
+            bool, Field(description="Include an auto-generated abstract")
+        ] = True,
+        include_figures: Annotated[
+            bool, Field(description="Include figures in the draft")
+        ] = True,
     ) -> List[types.TextContent]:
         """Create a draft publication document from experimental results."""
         # First, gather all necessary data
@@ -1242,27 +1520,36 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
-                async def read_query(tx):
+
+                async def read_query(tx: AsyncTransaction) -> Any:
                     raw_result = await tx.run(exp_query, params)
                     return await raw_result.to_eager_result()
+
                 result = await session.execute_read(read_query)
 
                 if not result.records:
-                    return [types.TextContent(type="text", text=f"Could not find experiment with ID '{experiment_id}'.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Could not find experiment with ID '{experiment_id}'.",
+                        )
+                    ]
 
                 record = result.records[0]
 
                 # Extract observations from the record
                 observations = []
-                if 'observations' in record:
-                    for obs in record['observations']:
-                        observations.append({
-                            'id': obs.get('id'),
-                            'content': obs.get('content'),
-                            'timestamp': obs.get('timestamp'),
-                            'supports_hypothesis': obs.get('supports_hypothesis'),
-                            'evidence_strength': obs.get('evidence_strength')
-                        })
+                if "observations" in record:
+                    for obs in record["observations"]:
+                        observations.append(
+                            {
+                                "id": obs.get("id"),
+                                "content": obs.get("content"),
+                                "timestamp": obs.get("timestamp"),
+                                "supports_hypothesis": obs.get("supports_hypothesis"),
+                                "evidence_strength": obs.get("evidence_strength"),
+                            }
+                        )
 
                 # Now, create the publication draft
                 current_date = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -1280,29 +1567,39 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
                 if include_abstract:
                     publication += "## Abstract\n\n"
 
-                    experiment_name = record.get('experiment_name')
-                    hypothesis_text = record.get('hypothesis_text')
-                    protocol_name = record.get('protocol_name')
+                    experiment_name = record.get("experiment_name")
+                    hypothesis_text = record.get("hypothesis_text")
+                    protocol_name = record.get("protocol_name")
 
                     # Generate simple abstract
                     abstract = f"This study investigated {hypothesis_text} "
                     abstract += f"through an experiment titled '{experiment_name}' using the protocol '{protocol_name}'. "
 
                     total_obs = len(observations)
-                    supporting = sum(1 for o in observations if o.get('supports_hypothesis') is True)
-                    contradicting = sum(1 for o in observations if o.get('supports_hypothesis') is False)
+                    supporting = sum(
+                        1 for o in observations if o.get("supports_hypothesis") is True
+                    )
+                    contradicting = sum(
+                        1 for o in observations if o.get("supports_hypothesis") is False
+                    )
 
                     if total_obs > 0:
-                        abstract += f"A total of {total_obs} observations were recorded. "
+                        abstract += (
+                            f"A total of {total_obs} observations were recorded. "
+                        )
 
                         if supporting > contradicting:
-                            abstract += "The results generally supported the hypothesis. "
+                            abstract += (
+                                "The results generally supported the hypothesis. "
+                            )
                         elif contradicting > supporting:
-                            abstract += "The results generally contradicted the hypothesis. "
+                            abstract += (
+                                "The results generally contradicted the hypothesis. "
+                            )
                         else:
                             abstract += "The results were inconclusive regarding the hypothesis. "
 
-                    current_prob = record.get('current_probability')
+                    current_prob = record.get("current_probability")
                     if current_prob is not None:
                         if float(current_prob) > 0.8:
                             abstract += "The evidence strongly supports the original hypothesis."
@@ -1319,24 +1616,24 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
                 # Introduction
                 publication += "## Introduction\n\n"
-                if record.get('hypothesis_description'):
-                    publication += record.get('hypothesis_description') + "\n\n"
+                if record.get("hypothesis_description"):
+                    publication += record.get("hypothesis_description") + "\n\n"
                 else:
                     publication += f"This study was designed to test the hypothesis: {record.get('hypothesis_text')}\n\n"
 
                 # Methods
                 publication += "## Methods\n\n"
-                if record.get('experiment_description'):
-                    publication += record.get('experiment_description') + "\n\n"
+                if record.get("experiment_description"):
+                    publication += record.get("experiment_description") + "\n\n"
 
                 # Protocol
                 publication += "### Protocol\n\n"
-                steps = record.get('protocol_steps', [])
+                steps = record.get("protocol_steps", [])
                 for i, step in enumerate(steps, 1):
                     publication += f"{i}. {step}\n"
 
                 # Materials (if available)
-                materials = record.get('materials', [])
+                materials = record.get("materials", [])
                 if materials:
                     publication += "\n### Materials\n\n"
                     for material in materials:
@@ -1347,15 +1644,25 @@ Each entity in the system has provenance tracking, ensuring reproducibility and 
 
                 # Calculate basic statistics for results section
                 total_observations = len(observations)
-                supporting = sum(1 for o in observations if o.get('supports_hypothesis') is True)
-                contradicting = sum(1 for o in observations if o.get('supports_hypothesis') is False)
+                supporting = sum(
+                    1 for o in observations if o.get("supports_hypothesis") is True
+                )
+                contradicting = sum(
+                    1 for o in observations if o.get("supports_hypothesis") is False
+                )
                 neutral = total_observations - supporting - contradicting
 
-                publication += f"A total of {total_observations} observations were recorded. "
+                publication += (
+                    f"A total of {total_observations} observations were recorded. "
+                )
 
                 publication += f"Of these, {supporting} supported the hypothesis, {contradicting} contradicted it, "
                 publication += f"and {neutral} were neutral.\n"
 
                 return [types.TextContent(type="text", text=publication)]
         except Exception as e:
-            return [types.TextContent(type="text", text=f"Error creating publication draft: {str(e)}")]
+            return [
+                types.TextContent(
+                    type="text", text=f"Error creating publication draft: {str(e)}"
+                )
+            ]

@@ -7,15 +7,15 @@ Abstract Syntax Tree (AST) and Abstract Semantic Graph (ASG) tools.
 
 import json
 import logging
-import uuid
 import os
-import asyncio
-from typing import Dict, Any, List, Optional, Union, Tuple
+import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
 import mcp.types as types
-from pydantic import Field
-from neo4j import AsyncTransaction
-from .base_incarnation import BaseIncarnation
+import neo4j
+
 from ..event_loop_manager import safe_neo4j_session
+from .base_incarnation import BaseIncarnation
 
 logger = logging.getLogger("mcp_neocoder.incarnations.code_analysis")
 
@@ -40,7 +40,9 @@ class CodeAnalysisIncarnation(BaseIncarnation):
     name = "code_analysis"
 
     # Metadata for display in the UI
-    description = "Code analysis using Abstract Syntax Trees and Abstract Semantic Graphs"
+    description = (
+        "Code analysis using Abstract Syntax Trees and Abstract Semantic Graphs"
+    )
     version = "1.0.0"
 
     # Explicitly define which methods should be registered as tools
@@ -51,34 +53,39 @@ class CodeAnalysisIncarnation(BaseIncarnation):
         "find_code_smells",
         "generate_documentation",
         "explore_code_structure",
-        "search_code_constructs"
+        "search_code_constructs",
     ]
 
     # Schema queries for Neo4j setup
     schema_queries = [
         # CodeFile constraints (project-scoped to allow multiple projects)
         "CREATE CONSTRAINT code_file_path IF NOT EXISTS FOR (f:CodeFile) REQUIRE (f.project_id, f.path) IS UNIQUE",
-
         # AST nodes
         "CREATE CONSTRAINT ast_node_id IF NOT EXISTS FOR (n:ASTNode) REQUIRE n.id IS UNIQUE",
-
         # Analyses
         "CREATE CONSTRAINT analysis_id IF NOT EXISTS FOR (a:Analysis) REQUIRE a.id IS UNIQUE",
-
         # Indexes for efficient querying
         "CREATE INDEX code_file_language IF NOT EXISTS FOR (f:CodeFile) ON (f.language)",
         "CREATE INDEX ast_node_type IF NOT EXISTS FOR (n:ASTNode) ON (n.nodeType)",
         "CREATE FULLTEXT INDEX code_content_fulltext IF NOT EXISTS FOR (f:CodeFile) ON EACH [f.content]",
-        "CREATE FULLTEXT INDEX code_construct_fulltext IF NOT EXISTS FOR (n:ASTNode) ON EACH [n.name, n.value]"
+        "CREATE FULLTEXT INDEX code_construct_fulltext IF NOT EXISTS FOR (n:ASTNode) ON EACH [n.name, n.value]",
     ]
 
-    async def _safe_execute_write(self, session, query, params=None):
+    async def _safe_execute_write(
+        self,
+        session: neo4j.AsyncSession,
+        query: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, Dict[str, Any]]:
         """Execute a write query safely and handle all errors internally."""
         if params is None:
             params = {}
 
         try:
-            async def execute_in_tx(tx):
+
+            async def execute_in_tx(
+                tx: neo4j.AsyncTransaction,
+            ) -> Tuple[bool, Dict[str, Any]]:
                 result = await tx.run(query, params)
                 try:
                     summary = await result.consume()
@@ -87,7 +94,7 @@ class CodeAnalysisIncarnation(BaseIncarnation):
                         "relationships_created": summary.counters.relationships_created,
                         "properties_set": summary.counters.properties_set,
                         "nodes_deleted": summary.counters.nodes_deleted,
-                        "relationships_deleted": summary.counters.relationships_deleted
+                        "relationships_deleted": summary.counters.relationships_deleted,
                     }
                     return True, stats
                 except Exception as inner_e:
@@ -100,13 +107,19 @@ class CodeAnalysisIncarnation(BaseIncarnation):
             logger.error(f"Error executing write query: {e}")
             return False, {}
 
-    async def _safe_read_query(self, session, query, params=None):
+    async def _safe_read_query(
+        self,
+        session: neo4j.AsyncSession,
+        query: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Any:
         """Execute a read query safely, handling all errors internally."""
         if params is None:
             params = {}
 
         try:
-            async def execute_and_process_in_tx(tx):
+
+            async def execute_and_process_in_tx(tx: neo4j.AsyncTransaction) -> str:
                 try:
                     result = await tx.run(query, params)
                     records = await result.values()
@@ -114,14 +127,21 @@ class CodeAnalysisIncarnation(BaseIncarnation):
                     processed_data = []
                     for record in records:
                         if isinstance(record, (list, tuple)):
-                            field_names = ['col0', 'col1', 'col2', 'col3', 'col4', 'col5']
+                            field_names = [
+                                "col0",
+                                "col1",
+                                "col2",
+                                "col3",
+                                "col4",
+                                "col5",
+                            ]
                             row_data = {}
 
                             for i, value in enumerate(record):
                                 if i < len(field_names):
                                     row_data[field_names[i]] = value
                                 else:
-                                    row_data[f'col{i}'] = value
+                                    row_data[f"col{i}"] = value
 
                             processed_data.append(row_data)
                         else:
@@ -144,7 +164,9 @@ class CodeAnalysisIncarnation(BaseIncarnation):
             logger.error(f"Error executing read query: {e}")
             return []
 
-    def _call_ast_analyzer_sync(self, tool_name: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _call_ast_analyzer_sync(
+        self, tool_name: str, params: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         """Call an AST analyzer tool synchronously and return the result."""
         try:
             # Use the MCP AST analyzer tools that are already available
@@ -152,8 +174,6 @@ class CodeAnalysisIncarnation(BaseIncarnation):
 
             if tool_name == "analyze_code":
                 # Call the local AST analyzer analyze_code function directly
-                import importlib.util
-                import sys
 
                 # Since we know the AST analyzer is available as MCP tools, we can simulate the call
                 # For now, provide a working implementation that extracts basic code metrics
@@ -167,36 +187,52 @@ class CodeAnalysisIncarnation(BaseIncarnation):
                     "functions": [],
                     "classes": [],
                     "imports": [],
-                    "complexity_metrics": {"max_nesting_level": 0, "total_nodes": 0}
+                    "complexity_metrics": {"max_nesting_level": 0, "total_nodes": 0},
                 }
 
-                lines = [] # Initialize lines to an empty list
+                lines = []  # Initialize lines to an empty list
                 # Simple Python parsing for function and class detection
                 if language == "python":
-                    lines = code.split('\n')
+                    lines = code.split("\n")
                     for i, line in enumerate(lines):
                         stripped = line.strip()
-                        if stripped.startswith('def '):
-                            func_name = stripped.split('(')[0].replace('def ', '').strip()
-                            result["functions"].append({
-                                "name": func_name,
-                                "location": {"start_line": i + 1, "end_line": i + 1},
-                                "parameters": []
-                            })
-                        elif stripped.startswith('class '):
-                            class_name = stripped.split(':')[0].replace('class ', '').strip()
-                            result["classes"].append({
-                                "name": class_name,
-                                "location": {"start_line": i + 1, "end_line": i + 1}
-                            })
-                        elif stripped.startswith('import ') or stripped.startswith('from '):
+                        if stripped.startswith("def "):
+                            func_name = (
+                                stripped.split("(")[0].replace("def ", "").strip()
+                            )
+                            result["functions"].append(
+                                {
+                                    "name": func_name,
+                                    "location": {
+                                        "start_line": i + 1,
+                                        "end_line": i + 1,
+                                    },
+                                    "parameters": [],
+                                }
+                            )
+                        elif stripped.startswith("class "):
+                            class_name = (
+                                stripped.split(":")[0].replace("class ", "").strip()
+                            )
+                            result["classes"].append(
+                                {
+                                    "name": class_name,
+                                    "location": {
+                                        "start_line": i + 1,
+                                        "end_line": i + 1,
+                                    },
+                                }
+                            )
+                        elif stripped.startswith("import ") or stripped.startswith(
+                            "from "
+                        ):
                             result["imports"].append(stripped)
 
                 # Estimate complexity
                 result["complexity_metrics"]["total_nodes"] = len(lines)
-                result["complexity_metrics"]["max_nesting_level"] = max([
-                    (len(line) - len(line.lstrip())) // 4 for line in lines
-                ], default=0)
+                result["complexity_metrics"]["max_nesting_level"] = max(
+                    [(len(line) - len(line.lstrip())) // 4 for line in lines], default=0
+                )
 
                 return result
 
@@ -207,8 +243,8 @@ class CodeAnalysisIncarnation(BaseIncarnation):
                     "ast": {
                         "type": "module",
                         "children": [],
-                        "text": params.get("code", "")
-                    }
+                        "text": params.get("code", ""),
+                    },
                 }
 
             elif tool_name == "generate_asg":
@@ -216,7 +252,7 @@ class CodeAnalysisIncarnation(BaseIncarnation):
                 return {
                     "nodes": [],
                     "edges": [],
-                    "metadata": {"language": params.get("language", "unknown")}
+                    "metadata": {"language": params.get("language", "unknown")},
                 }
 
             else:
@@ -342,14 +378,16 @@ Analysis results are stored in Neo4j with the following structure:
         # Directly return the guidance hub content
         return [types.TextContent(type="text", text=hub_description)]
 
-    async def initialize_schema(self):
+    async def initialize_schema(self) -> None:
         """Initialize the Neo4j schema for Code Analysis."""
         try:
             async with safe_neo4j_session(self.driver, self.database) as session:
                 # Execute each constraint/index query individually
                 for query in self.schema_queries:
-                    async def run_query(tx, query: str):
+
+                    async def run_query(tx: neo4j.AsyncTransaction, query: str) -> Any:
                         return await tx.run(query)
+
                     await session.execute_write(run_query, query)
 
                 # Create base guidance hub for this incarnation if it doesn't exist
@@ -360,7 +398,7 @@ Analysis results are stored in Neo4j with the following structure:
             logger.error(f"Error initializing code_analysis schema: {e}")
             raise
 
-    async def ensure_hub_exists(self):
+    async def ensure_hub_exists(self) -> None:
         """Create the guidance hub for this incarnation if it doesn't exist."""
         query = """
         MERGE (hub:AiGuidanceHub {id: 'code_analysis_hub'})
@@ -489,7 +527,7 @@ Analysis results are stored in Neo4j with the following structure:
             "language": ast_data.get("language", "unknown"),
             "node_count": 0,
             "root_node_type": "unknown",
-            "nodes": []
+            "nodes": [],
         }
 
         # Extract the root node and process the tree
@@ -498,14 +536,19 @@ Analysis results are stored in Neo4j with the following structure:
             processed_data["root_node_type"] = root.get("type", "unknown")
 
             # Process nodes (simplified for the example)
-            nodes = []
+            nodes: List[Dict[str, Any]] = []
             self._extract_nodes(root, nodes)
             processed_data["nodes"] = nodes
             processed_data["node_count"] = len(nodes)
 
         return processed_data
 
-    def _extract_nodes(self, node: Dict[str, Any], nodes: List[Dict[str, Any]], parent_id: Optional[str] = None):
+    def _extract_nodes(
+        self,
+        node: Dict[str, Any],
+        nodes: List[Dict[str, Any]],
+        parent_id: Optional[str] = None,
+    ) -> None:
         """Extract nodes from AST for Neo4j storage."""
         if not node or not isinstance(node, dict):
             return
@@ -520,10 +563,7 @@ Analysis results are stored in Neo4j with the following structure:
             "parent_id": parent_id,
             "value": node.get("value", ""),
             "name": node.get("name", ""),
-            "location": {
-                "start": node.get("start", {}),
-                "end": node.get("end", {})
-            }
+            "location": {"start": node.get("start", {}), "end": node.get("end", {})},
         }
 
         # Add to the nodes list
@@ -541,7 +581,9 @@ Analysis results are stored in Neo4j with the following structure:
                     if isinstance(item, dict):
                         self._extract_nodes(item, nodes, node_id)
 
-    async def _store_ast_in_neo4j(self, file_path: str, ast_processed: Dict[str, Any]) -> Tuple[bool, str]:
+    async def _store_ast_in_neo4j(
+        self, file_path: str, ast_processed: Dict[str, Any]
+    ) -> Tuple[bool, str]:
         """Store processed AST data in Neo4j."""
         # Generate a unique analysis ID
         analysis_id = str(uuid.uuid4())
@@ -594,7 +636,7 @@ Analysis results are stored in Neo4j with the following structure:
                 success1, _ = await self._safe_execute_write(
                     session,
                     file_query,
-                    {"path": file_path, "language": ast_processed["language"]}
+                    {"path": file_path, "language": ast_processed["language"]},
                 )
 
                 # Create analysis node
@@ -605,8 +647,8 @@ Analysis results are stored in Neo4j with the following structure:
                         "id": analysis_id,
                         "path": file_path,
                         "nodeCount": ast_processed["node_count"],
-                        "language": ast_processed["language"]
-                    }
+                        "language": ast_processed["language"],
+                    },
                 )
 
                 # Create AST nodes (in batches to avoid transaction size limits)
@@ -614,11 +656,11 @@ Analysis results are stored in Neo4j with the following structure:
                 batch_size = 100
 
                 for i in range(0, len(nodes), batch_size):
-                    batch = nodes[i:i+batch_size]
+                    batch = nodes[i : i + batch_size]
                     batch_success, _ = await self._safe_execute_write(
                         session,
                         nodes_query,
-                        {"nodes": batch, "analysisId": analysis_id}
+                        {"nodes": batch, "analysisId": analysis_id},
                     )
 
                     if not batch_success:
@@ -640,7 +682,7 @@ Analysis results are stored in Neo4j with the following structure:
         language: Optional[str] = None,
         include_patterns: Optional[List[str]] = None,
         exclude_patterns: Optional[List[str]] = None,
-        analysis_depth: str = "basic"  # Options: "basic", "detailed", "comprehensive"
+        analysis_depth: str = "basic",  # Options: "basic", "detailed", "comprehensive"
     ) -> List[types.TextContent]:
         """Analyze an entire codebase or directory structure.
 
@@ -660,7 +702,10 @@ Analysis results are stored in Neo4j with the following structure:
         # This would be implemented using the actual AST tools
         # Here's a sketch of the implementation
 
-        return [types.TextContent(type="text", text=f"""
+        return [
+            types.TextContent(
+                type="text",
+                text=f"""
 # Codebase Analysis: Not Yet Implemented
 
 This tool would analyze the codebase at:
@@ -680,14 +725,16 @@ Implementation would:
 4. Provide a summary report
 
 The analysis would be stored in Neo4j for future reference and exploration.
-        """)]
+        """,
+            )
+        ]
 
     async def analyze_file(
         self,
         file_path: str,
         version_tag: Optional[str] = None,
         analysis_type: str = "ast",  # Options: "ast", "asg", "both"
-        include_metrics: bool = True
+        include_metrics: bool = True,
     ) -> List[types.TextContent]:
         """Analyze a single code file in depth.
 
@@ -706,7 +753,7 @@ The analysis would be stored in Neo4j for future reference and exploration.
         try:
             # Read the file content
             try:
-                with open(file_path, 'r') as f:
+                with open(file_path, "r") as f:
                     code_content = f.read()
             except Exception as e:
                 return [types.TextContent(type="text", text=f"Error reading file: {e}")]
@@ -714,28 +761,33 @@ The analysis would be stored in Neo4j for future reference and exploration.
             # Determine language based on file extension
             ext = os.path.splitext(file_path)[1].lower()
             language_map = {
-                '.py': 'python',
-                '.js': 'javascript',
-                '.jsx': 'javascript',
-                '.ts': 'typescript',
-                '.tsx': 'typescript',
-                '.java': 'java',
-                '.c': 'c',
-                '.cpp': 'cpp',
-                '.h': 'c',
-                '.hpp': 'cpp',
-                '.cs': 'csharp',
-                '.go': 'go',
-                '.rb': 'ruby',
-                '.php': 'php',
-                '.swift': 'swift',
-                '.kt': 'kotlin',
-                '.rs': 'rust'
+                ".py": "python",
+                ".js": "javascript",
+                ".jsx": "javascript",
+                ".ts": "typescript",
+                ".tsx": "typescript",
+                ".java": "java",
+                ".c": "c",
+                ".cpp": "cpp",
+                ".h": "c",
+                ".hpp": "cpp",
+                ".cs": "csharp",
+                ".go": "go",
+                ".rb": "ruby",
+                ".php": "php",
+                ".swift": "swift",
+                ".kt": "kotlin",
+                ".rs": "rust",
             }
             language = language_map.get(ext)
 
             if not language:
-                return [types.TextContent(type="text", text=f"Unsupported file extension: {ext}. Please specify language manually.")]
+                return [
+                    types.TextContent(
+                        type="text",
+                        text=f"Unsupported file extension: {ext}. Please specify language manually.",
+                    )
+                ]
 
             # Store analysis results
             results = {}
@@ -744,22 +796,27 @@ The analysis would be stored in Neo4j for future reference and exploration.
             if analysis_type in ["ast", "both"]:
                 try:
                     # Call AST analyzer parse_to_ast
-                    ast_result = self._call_ast_analyzer_sync("parse_to_ast", {
-                        "code": code_content,
-                        "language": language,
-                        "filename": os.path.basename(file_path)
-                    })
+                    ast_result = self._call_ast_analyzer_sync(
+                        "parse_to_ast",
+                        {
+                            "code": code_content,
+                            "language": language,
+                            "filename": os.path.basename(file_path),
+                        },
+                    )
 
                     # Process and store AST data in Neo4j
                     if ast_result:
                         processed_ast = await self._process_ast_data(ast_result)
-                        success, analysis_id = await self._store_ast_in_neo4j(file_path, processed_ast)
+                        success, analysis_id = await self._store_ast_in_neo4j(
+                            file_path, processed_ast
+                        )
 
                         if success:
                             results["ast"] = {
                                 "analysis_id": analysis_id,
                                 "node_count": processed_ast["node_count"],
-                                "root_type": processed_ast["root_node_type"]
+                                "root_type": processed_ast["root_node_type"],
                             }
                         else:
                             results["ast"] = {"error": "Failed to store AST in Neo4j"}
@@ -772,17 +829,20 @@ The analysis would be stored in Neo4j for future reference and exploration.
             if analysis_type in ["asg", "both"]:
                 try:
                     # Use ASG analyzer
-                    asg_result = self._call_ast_analyzer_sync("generate_asg", {
-                        "code": code_content,
-                        "language": language,
-                        "filename": os.path.basename(file_path)
-                    })
+                    asg_result = self._call_ast_analyzer_sync(
+                        "generate_asg",
+                        {
+                            "code": code_content,
+                            "language": language,
+                            "filename": os.path.basename(file_path),
+                        },
+                    )
 
                     if asg_result:
                         # Store ASG data (similar processing as AST)
                         results["asg"] = {
                             "node_count": len(asg_result.get("nodes", [])),
-                            "edge_count": len(asg_result.get("edges", []))
+                            "edge_count": len(asg_result.get("edges", [])),
                         }
                     else:
                         results["asg"] = {"error": "Failed to get ASG result"}
@@ -793,11 +853,14 @@ The analysis would be stored in Neo4j for future reference and exploration.
             if include_metrics:
                 try:
                     # Use analyze_code tool
-                    metrics_result = self._call_ast_analyzer_sync("analyze_code", {
-                        "code": code_content,
-                        "language": language,
-                        "filename": os.path.basename(file_path)
-                    })
+                    metrics_result = self._call_ast_analyzer_sync(
+                        "analyze_code",
+                        {
+                            "code": code_content,
+                            "language": language,
+                            "filename": os.path.basename(file_path),
+                        },
+                    )
 
                     if metrics_result:
                         # Extract and store metrics
@@ -805,7 +868,7 @@ The analysis would be stored in Neo4j for future reference and exploration.
                             "code_length": metrics_result.get("code_length", 0),
                             "function_count": len(metrics_result.get("functions", [])),
                             "class_count": len(metrics_result.get("classes", [])),
-                            "complexity": metrics_result.get("complexity_metrics", {})
+                            "complexity": metrics_result.get("complexity_metrics", {}),
                         }
                     else:
                         results["metrics"] = {"error": "Failed to get metrics result"}
@@ -898,14 +961,16 @@ The analysis results have been stored in Neo4j and can be explored using:
             return [types.TextContent(type="text", text=summary)]
 
         except Exception as e:
-            return [types.TextContent(type="text", text=f"Error analyzing file: {str(e)}")]
+            return [
+                types.TextContent(type="text", text=f"Error analyzing file: {str(e)}")
+            ]
 
     async def compare_versions(
         self,
         file_path: str,
         old_version: str,
         new_version: str,
-        comparison_level: str = "structural"  # Options: "structural", "semantic", "detailed"
+        comparison_level: str = "structural",  # Options: "structural", "semantic", "detailed"
     ) -> List[types.TextContent]:
         """Compare different versions of the same code.
 
@@ -924,7 +989,10 @@ The analysis results have been stored in Neo4j and can be explored using:
         # This would be implemented using the actual AST diff tools
         # Here's a sketch of the implementation
 
-        return [types.TextContent(type="text", text=f"""
+        return [
+            types.TextContent(
+                type="text",
+                text=f"""
 # Version Comparison: Not Yet Implemented
 
 This tool would compare versions of:
@@ -942,13 +1010,17 @@ Implementation would:
 6. Store the comparison results in Neo4j
 
 The comparison would highlight structural and semantic changes between versions.
-        """)]
+        """,
+            )
+        ]
 
     async def find_code_smells(
         self,
         target: str,  # Either a file path or analysis ID
-        smell_categories: Optional[List[str]] = None,  # Categories of code smells to look for
-        threshold: str = "medium"  # Options: "low", "medium", "high"
+        smell_categories: Optional[
+            List[str]
+        ] = None,  # Categories of code smells to look for
+        threshold: str = "medium",  # Options: "low", "medium", "high"
     ) -> List[types.TextContent]:
         """Identify potential code issues and suggestions.
 
@@ -971,41 +1043,52 @@ The comparison would highlight structural and semantic changes between versions.
             if is_file:
                 # Read the file content
                 try:
-                    with open(target, 'r') as f:
+                    with open(target, "r") as f:
                         code_content = f.read()
                 except Exception as e:
-                    return [types.TextContent(type="text", text=f"Error reading file: {e}")]
+                    return [
+                        types.TextContent(type="text", text=f"Error reading file: {e}")
+                    ]
 
                 # Determine language based on file extension
                 ext = os.path.splitext(target)[1].lower()
                 language_map = {
-                    '.py': 'python',
-                    '.js': 'javascript',
-                    '.jsx': 'javascript',
-                    '.ts': 'typescript',
-                    '.tsx': 'typescript',
-                    '.java': 'java',
-                    '.c': 'c',
-                    '.cpp': 'cpp',
-                    '.h': 'c',
-                    '.hpp': 'cpp',
-                    '.cs': 'csharp',
-                    '.go': 'go',
-                    '.rb': 'ruby',
-                    '.php': 'php',
-                    '.swift': 'swift',
-                    '.kt': 'kotlin',
-                    '.rs': 'rust'
+                    ".py": "python",
+                    ".js": "javascript",
+                    ".jsx": "javascript",
+                    ".ts": "typescript",
+                    ".tsx": "typescript",
+                    ".java": "java",
+                    ".c": "c",
+                    ".cpp": "cpp",
+                    ".h": "c",
+                    ".hpp": "cpp",
+                    ".cs": "csharp",
+                    ".go": "go",
+                    ".rb": "ruby",
+                    ".php": "php",
+                    ".swift": "swift",
+                    ".kt": "kotlin",
+                    ".rs": "rust",
                 }
                 language = language_map.get(ext)
 
                 if not language:
-                    return [types.TextContent(type="text", text=f"Unsupported file extension: {ext}. Please specify language manually.")]
+                    return [
+                        types.TextContent(
+                            type="text",
+                            text=f"Unsupported file extension: {ext}. Please specify language manually.",
+                        )
+                    ]
 
                 # Use existing AST and code analysis tools
                 # Call our internal AST analyzer functions
-                ast_result = self._call_ast_analyzer_sync("parse_to_ast", {"code": code_content, "language": language})
-                metrics_result = self._call_ast_analyzer_sync("analyze_code", {"code": code_content, "language": language})
+                ast_result = self._call_ast_analyzer_sync(
+                    "parse_to_ast", {"code": code_content, "language": language}
+                )
+                metrics_result = self._call_ast_analyzer_sync(
+                    "analyze_code", {"code": code_content, "language": language}
+                )
             else:
                 # Try to retrieve analysis from Neo4j using the ID
                 async with safe_neo4j_session(self.driver, self.database) as session:
@@ -1017,7 +1100,11 @@ The comparison would highlight structural and semantic changes between versions.
                     result = await self._safe_read_query(session, query, {"id": target})
 
                     if not result or len(result) == 0:
-                        return [types.TextContent(type="text", text=f"No analysis found with ID: {target}")]
+                        return [
+                            types.TextContent(
+                                type="text", text=f"No analysis found with ID: {target}"
+                            )
+                        ]
 
                     # We have the analysis, but we'll still need to get the code content for accurate analysis
                     analysis = result[0]
@@ -1025,23 +1112,43 @@ The comparison would highlight structural and semantic changes between versions.
                     file_path = analysis.get("file_path")
 
                     if not file_path or not os.path.exists(file_path):
-                        return [types.TextContent(type="text", text=f"Cannot find original file for analysis: {target}")]
+                        return [
+                            types.TextContent(
+                                type="text",
+                                text=f"Cannot find original file for analysis: {target}",
+                            )
+                        ]
 
                     # Read the file content
                     try:
-                        with open(file_path, 'r') as f:
+                        with open(file_path, "r") as f:
                             code_content = f.read()
                     except Exception as e:
-                        return [types.TextContent(type="text", text=f"Error reading file: {e}")]
+                        return [
+                            types.TextContent(
+                                type="text", text=f"Error reading file: {e}"
+                            )
+                        ]
 
                     # Use existing tools for fresh analysis
                     # Use existing tools for fresh analysis
                     # Call our internal AST analyzer functions
-                    ast_result = self._call_ast_analyzer_sync("parse_to_ast", {"code": code_content, "language": language})
-                    metrics_result = self._call_ast_analyzer_sync("analyze_code", {"code": code_content, "language": language})
+                    ast_result = self._call_ast_analyzer_sync(
+                        "parse_to_ast", {"code": code_content, "language": language}
+                    )
+                    metrics_result = self._call_ast_analyzer_sync(
+                        "analyze_code", {"code": code_content, "language": language}
+                    )
+
             # Define code smell detection functions
-            def detect_complex_functions(ast_data, metrics_data, threshold_level):
+            def detect_complex_functions(
+                ast_data: Optional[Dict[str, Any]],
+                metrics_data: Optional[Dict[str, Any]],
+                threshold_level: str,
+            ) -> List[Dict[str, Any]]:
                 """Detect overly complex functions based on nesting and complexity."""
+                if not ast_data or not metrics_data:
+                    return []
                 smells = []
                 threshold_map = {"low": 3, "medium": 5, "high": 8}
                 complexity_threshold = threshold_map.get(threshold_level, 5)
@@ -1057,19 +1164,29 @@ The comparison would highlight structural and semantic changes between versions.
 
                     # Check for overly long functions
                     if line_count > complexity_threshold * 5:
-                        smells.append({
-                            "type": "long_function",
-                            "name": func_name,
-                            "location": location,
-                            "severity": "medium" if line_count > complexity_threshold * 10 else "low",
-                            "description": f"Function '{func_name}' is {line_count} lines long, which may indicate it's doing too much.",
-                            "suggestion": "Consider breaking it down into smaller, focused functions."
-                        })
+                        smells.append(
+                            {
+                                "type": "long_function",
+                                "name": func_name,
+                                "location": location,
+                                "severity": (
+                                    "medium"
+                                    if line_count > complexity_threshold * 10
+                                    else "low"
+                                ),
+                                "description": f"Function '{func_name}' is {line_count} lines long, which may indicate it's doing too much.",
+                                "suggestion": "Consider breaking it down into smaller, focused functions.",
+                            }
+                        )
 
                 return smells
 
-            def detect_unused_imports(ast_data, language):
+            def detect_unused_imports(
+                ast_data: Optional[Dict[str, Any]], language: str
+            ) -> List[Dict[str, Any]]:
                 """Detect unused imports in the code."""
+                if not ast_data:
+                    return []
                 smells = []
 
                 # This is a simplified implementation; a real one would trace usage through the AST
@@ -1080,7 +1197,10 @@ The comparison would highlight structural and semantic changes between versions.
 
                     # Extract imports from AST
                     for node in ast_data.get("ast", {}).get("children", []):
-                        if node.get("type") in ["import_statement", "import_from_statement"]:
+                        if node.get("type") in [
+                            "import_statement",
+                            "import_from_statement",
+                        ]:
                             for child in node.get("children", []):
                                 if child.get("type") == "dotted_name":
                                     module_name = child.get("text", "")
@@ -1089,37 +1209,55 @@ The comparison would highlight structural and semantic changes between versions.
                                         imported_names.append(module_name)
 
                     # Simple check: if 'logging' is imported but not used
-                    if "logging" in imported_modules and "logging" not in code_content[100:]:
-                        smells.append({
-                            "type": "unused_import",
-                            "name": "logging",
-                            "severity": "low",
-                            "description": "The 'logging' module appears to be imported but not used.",
-                            "suggestion": "Remove unused imports to improve code clarity and execution time."
-                        })
+                    if (
+                        "logging" in imported_modules
+                        and "logging" not in code_content[100:]
+                    ):
+                        smells.append(
+                            {
+                                "type": "unused_import",
+                                "name": "logging",
+                                "severity": "low",
+                                "description": "The 'logging' module appears to be imported but not used.",
+                                "suggestion": "Remove unused imports to improve code clarity and execution time.",
+                            }
+                        )
 
                 return smells
 
-            def detect_magic_numbers(ast_data):
+            def detect_magic_numbers(
+                ast_data: Optional[Dict[str, Any]],
+            ) -> List[Dict[str, Any]]:
                 """Detect magic numbers in the code."""
+                if not ast_data:
+                    return []
                 smells = []
 
                 # Find all integer literals outside of variable declarations
-                for node_id, node in ast_data.items():
-                    if node.get("type") == "integer" and node.get("text") not in ["0", "1", "-1"]:
+                for _node_id, node in ast_data.items():
+                    if node.get("type") == "integer" and node.get("text") not in [
+                        "0",
+                        "1",
+                        "-1",
+                    ]:
                         # Check if within variable declaration
                         in_declaration = False
                         # Simple heuristic - in a real implementation we'd traverse the AST properly
 
                         if not in_declaration:
-                            smells.append({
-                                "type": "magic_number",
-                                "value": node.get("text", ""),
-                                "location": {"start_line": node.get("start_line", 0), "start_col": node.get("start_col", 0)},
-                                "severity": "low",
-                                "description": f"Magic number {node.get('text', '')} found in code.",
-                                "suggestion": "Consider replacing with a named constant for better readability."
-                            })
+                            smells.append(
+                                {
+                                    "type": "magic_number",
+                                    "value": node.get("text", ""),
+                                    "location": {
+                                        "start_line": node.get("start_line", 0),
+                                        "start_col": node.get("start_col", 0),
+                                    },
+                                    "severity": "low",
+                                    "description": f"Magic number {node.get('text', '')} found in code.",
+                                    "suggestion": "Consider replacing with a named constant for better readability.",
+                                }
+                            )
 
                 return smells
 
@@ -1128,7 +1266,9 @@ The comparison would highlight structural and semantic changes between versions.
 
             # Apply appropriate detectors based on requested categories
             if not smell_categories or "complexity" in smell_categories:
-                all_smells.extend(detect_complex_functions(ast_result, metrics_result, threshold))
+                all_smells.extend(
+                    detect_complex_functions(ast_result, metrics_result, threshold)
+                )
 
             if not smell_categories or "unused" in smell_categories:
                 all_smells.extend(detect_unused_imports(ast_result, language))
@@ -1142,8 +1282,10 @@ The comparison would highlight structural and semantic changes between versions.
             threshold_value = threshold_levels.get(threshold, 1)
 
             filtered_smells = [
-                smell for smell in all_smells
-                if severity_levels.get(smell.get("severity", "medium"), 1) >= threshold_value
+                smell
+                for smell in all_smells
+                if severity_levels.get(smell.get("severity", "medium"), 1)
+                >= threshold_value
             ]
 
             # Generate report
@@ -1198,14 +1340,18 @@ This could mean:
             return [types.TextContent(type="text", text=report)]
 
         except Exception as e:
-            return [types.TextContent(type="text", text=f"Error analyzing code smells: {str(e)}")]
+            return [
+                types.TextContent(
+                    type="text", text=f"Error analyzing code smells: {str(e)}"
+                )
+            ]
 
     async def generate_documentation(
         self,
         target: str,  # Either a file path, directory path, or analysis ID
         doc_format: str = "markdown",  # Options: "markdown", "html", "text"
         include_diagrams: bool = True,
-        detail_level: str = "standard"  # Options: "minimal", "standard", "comprehensive"
+        detail_level: str = "standard",  # Options: "minimal", "standard", "comprehensive"
     ) -> List[types.TextContent]:
         """Generate documentation from code analysis.
 
@@ -1224,7 +1370,10 @@ This could mean:
         # This would be implemented using the AST analysis tools
         # Here's a sketch of the implementation
 
-        return [types.TextContent(type="text", text=f"""
+        return [
+            types.TextContent(
+                type="text",
+                text=f"""
 # Documentation Generator: Not Yet Implemented
 
 This tool would generate documentation for:
@@ -1245,13 +1394,15 @@ Implementation would:
 5. Store the documentation in Neo4j linked to the analysis
 
 The documentation would include properly formatted descriptions of code elements.
-        """)]
+        """,
+            )
+        ]
 
     async def explore_code_structure(
         self,
         target: str,  # Either a file path, directory path, or analysis ID
         view_type: str = "summary",  # Options: "summary", "detailed", "hierarchy", "dependencies"
-        include_metrics: bool = True
+        include_metrics: bool = True,
     ) -> List[types.TextContent]:
         """Explore the structure of a codebase.
 
@@ -1269,7 +1420,10 @@ The documentation would include properly formatted descriptions of code elements
         # This would be implemented using the AST analysis tools and Neo4j queries
         # Here's a sketch of the implementation
 
-        return [types.TextContent(type="text", text=f"""
+        return [
+            types.TextContent(
+                type="text",
+                text=f"""
 # Code Structure Explorer: Not Yet Implemented
 
 This tool would explore code structure in:
@@ -1289,14 +1443,16 @@ Implementation would:
 
 For a real implementation, this would query the Neo4j database for structure information
 stored from previous analyses and present it in a structured format.
-        """)]
+        """,
+            )
+        ]
 
     async def search_code_constructs(
         self,
         query: str,  # Search query
         search_type: str = "pattern",  # Options: "pattern", "semantic", "structure"
         scope: Optional[str] = None,  # Optional scope restriction (file, directory)
-        limit: int = 20
+        limit: int = 20,
     ) -> List[types.TextContent]:
         """Search for specific code constructs.
 
@@ -1315,7 +1471,10 @@ stored from previous analyses and present it in a structured format.
         # This would be implemented using Neo4j queries on the stored AST data
         # Here's a sketch of the implementation
 
-        return [types.TextContent(type="text", text=f"""
+        return [
+            types.TextContent(
+                type="text",
+                text=f"""
 # Code Construct Search: Not Yet Implemented
 
 This tool would search for code constructs:
@@ -1335,4 +1494,6 @@ Implementation would:
 
 For a real implementation, this would use Neo4j's query capabilities to search
 through stored AST/ASG structures and return matching code elements.
-        """)]
+        """,
+            )
+        ]

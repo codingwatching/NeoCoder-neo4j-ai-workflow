@@ -5,21 +5,30 @@ This module provides a helper to get a Qdrant client instance.
 You must have the `qdrant-client` Python package installed.
 """
 
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from qdrant_client import QdrantClient
 except ImportError:
     QdrantClient = None
 
-def get_qdrant_client(host: Optional[str] = None, port: Optional[int] = None, api_key: Optional[str] = None):
+
+def get_qdrant_client(
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    api_key: Optional[str] = None,
+) -> Any:
     """
     Returns a QdrantClient instance using environment variables or defaults.
     Raises ImportError if qdrant-client is not installed.
     """
     import os
-    if QdrantClient is None:
-        raise ImportError("qdrant-client package is not installed. Please install it with 'pip install qdrant-client'.")
+
+    client_cls = QdrantClient
+    if client_cls is None:
+        raise ImportError(
+            "qdrant-client package is not installed. Please install it with 'pip install qdrant-client'."
+        )
 
     host = host or os.environ.get("QDRANT_HOST", "localhost")
     port = port or int(os.environ.get("QDRANT_PORT", "6333"))
@@ -29,7 +38,11 @@ def get_qdrant_client(host: Optional[str] = None, port: Optional[int] = None, ap
     kwargs = {"host": host, "port": port}
     if api_key:
         kwargs["api_key"] = api_key
-    if os.environ.get("QDRANT_HTTPS", "false").lower() in ("1", "true", "yes"):  # optional
+    if os.environ.get("QDRANT_HTTPS", "false").lower() in (
+        "1",
+        "true",
+        "yes",
+    ):  # optional
         kwargs["https"] = True
 
-    return QdrantClient(**kwargs)
+    return client_cls(**kwargs)
